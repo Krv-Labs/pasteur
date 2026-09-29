@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 260" role="img" aria-labelledby="title desc">
+  <title id="title">Pasteur</title>
+  <desc id="desc">Clean cohort inputs pass through a P-shaped stress-test chamber and emerge as measured model responses.</desc>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M102 231V67c0-21 17-34 40-34h9c45 0 75 28 75 69 0 43-29 70-75 70-21 0-38-7-49-21"
+          stroke="#EDEDED" stroke-width="18"/>
+
+    <path d="M28 77c32 0 39 1 55 20 5 6 10 9 17 10"
+          stroke="#EDEDED" stroke-width="4"/>
+    <path d="M28 123h72" stroke="#EDEDED" stroke-width="4"/>
+    <path d="M28 169c32 0 39-1 55-20 5-6 10-9 17-10"
+          stroke="#EDEDED" stroke-width="4"/>
+
+    <path d="M113 107c18 0 22-2 31-15 9-14 17 14 28 0 10-13 16-2 22-17 7-18 18-22 57-22"
+          stroke="#EDEDED" stroke-width="4"/>
+    <path d="M113 123h31m15 0h25c18 0 22 9 36 9 11 0 19-9 31-9"
+          stroke="#EDEDED" stroke-width="4"/>
+    <path d="M113 139c24 0 29 2 38 24 8 20 14 29 27 29 16 0 22-20 29-39"
+          stroke="#EDEDED" stroke-width="4"/>
+    <path d="M178 139c19 0 28 14 34 32 6 19 15 28 39 28"
+          stroke="#F0A868" stroke-width="6"/>
+    <path d="M212 171c5 24 17 39 39 39"
+          stroke="#F0A868" stroke-width="4" stroke-dasharray="4 9"/>
+  </g>
+
+  <g fill="#333333" stroke="#EDEDED" stroke-width="4">
+    <circle cx="28" cy="77" r="12"/>
+    <circle cx="28" cy="123" r="12"/>
+    <circle cx="28" cy="169" r="12"/>
+    <circle cx="251" cy="53" r="12"/>
+    <circle cx="251" cy="123" r="12"/>
+    <circle cx="251" cy="199" r="12"/>
+  </g>
+
+  <g fill="#333333" stroke="#EDEDED" stroke-width="3">
+    <circle cx="102" cy="107" r="5"/>
+    <circle cx="102" cy="123" r="5"/>
+    <circle cx="102" cy="139" r="5"/>
+  </g>
+</svg>

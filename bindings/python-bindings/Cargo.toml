@@ -1,0 +1,25 @@
+[package]
+name = "pypasteur-bindings"
+description = "Python bindings for pasteur-core (published to PyPI as pypasteur)"
+# Ships through PyPI via maturin, not crates.io.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+# Also the Python import name: `import pypasteur`.
+name = "pypasteur"
+crate-type = ["cdylib"]
+
+[dependencies]
+pasteur-core = { workspace = true }
+# abi3: one wheel per platform covers every CPython >= 3.12.
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py312"] }
+pyo3-polars = "0.27"
+polars = { version = "0.54.4", features = ["lazy", "serde", "random"] }
+serde_json = "1.0"

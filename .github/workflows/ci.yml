@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main, oss/integration]
+  pull_request:
+    branches: [main, oss/integration]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-${{ steps.rust.outputs.cachekey }}-
+      - run: cargo clippy --workspace --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-${{ steps.rust.outputs.cachekey }}-
+      # Binding crates have no tests; skip them here and verify compile in `bindings`.
+      - run: |
+          cargo test --workspace --locked --exclude pypasteur-bindings
+
+  bindings:
+    name: bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bindings-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-bindings-${{ steps.rust.outputs.cachekey }}-
+      - run: cargo check --workspace --locked
+
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ./bindings/python-bindings
+      - run: python bindings/python-bindings/tests/smoke.py
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Keep in sync with `rust-version` in the root Cargo.toml.
+      - uses: dtolnay/rust-toolchain@1.95
+      - run: cargo +1.95 check --workspace --locked --exclude pypasteur-bindings
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --workspace --dry-run --locked

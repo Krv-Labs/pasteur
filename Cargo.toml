@@ -1,0 +1,38 @@
+[workspace]
+members = [
+    "core",
+    "hf",
+    "model",
+    "cli",
+    "bindings/python-bindings",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.95"
+license = "BSD-3-Clause"
+authors = ["Krv Labs, Inc."]
+repository = "https://github.com/Krv-Labs/pasteur"
+homepage = "https://github.com/Krv-Labs/pasteur"
+
+[workspace.dependencies]
+# Internal crates: path for local builds, version for crates.io.
+pasteur-core = { path = "core", version = "0.2.0" }
+pasteur-hf = { path = "hf", version = "0.2.0" }
+pasteur-model = { path = "model", version = "0.2.0" }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+polars = { version = "0.54.4", default-features = false, features = ["lazy", "serde", "random", "parquet", "dtype-full", "strings", "csv"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+rand = "0.8"
+sha2 = "0.10"
+
+# Debug info is the single biggest disk-space lever for this dependency tree
+# (polars + ort + reqwest/tokio/rustls pull in a lot of crates); this repo's
+# dev machine runs close to full, so keep debug builds lean by default.
+[profile.dev]
+debug = 0

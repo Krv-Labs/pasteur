@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pypasteur"
+# Version comes from the Cargo workspace.
+dynamic = ["version"]
+description = "Clinical AI stress-testing: blackout and jitter data simulators, powered by pasteur-core (Rust)"
+readme = "README.md"
+license = "BSD-3-Clause"
+authors = [{ name = "Krv Labs, Inc." }]
+requires-python = ">=3.12"
+dependencies = [
+    "polars>=0.20.0"
+]
+keywords = ["clinical-ai", "robustness", "simulation", "polars"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+[project.urls]
+Repository = "https://github.com/Krv-Labs/pasteur"
+Issues = "https://github.com/Krv-Labs/pasteur/issues"
+Changelog = "https://github.com/Krv-Labs/pasteur/blob/main/CHANGELOG.md"

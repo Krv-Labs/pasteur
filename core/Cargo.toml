@@ -1,0 +1,27 @@
+[package]
+name = "pasteur-core"
+description = "Clinical AI stress-testing engine: data simulators (blackout, jitter, flipper) and robustness evaluators"
+readme = "README.md"
+keywords = ["clinical-ai", "robustness", "simulation", "evaluation", "polars"]
+categories = ["science", "simulation"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Data / numerics
+polars = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+
+# Time / errors
+chrono = { workspace = true }
+thiserror = { workspace = true }

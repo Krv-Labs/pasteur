@@ -1,0 +1,113 @@
+use chrono::{DateTime, Utc};
+use polars::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlackoutConfig {
+    pub feature: String,
+    /// Columns nulled together with `feature` (e.g. `TSH_measured`), so a
+    /// blacked-out assay does not keep claiming it was observed. A null assay
+    /// beside a `_measured == 1` flag appears in no real record and in no
+    /// training set, so leaving companions untouched makes the resulting flip
+    /// rate measure extrapolation rather than robustness.
+    #[serde(default)]
+    pub companions: Vec<String>,
+    pub rate: f64,
+    pub window_frac: f64,
+    pub patient_id_col: Option<String>,
+    pub time_col: Option<String>,
+    pub random_state: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JitterConfig {
+    pub feature: String,
+    pub scale: f64,
+    pub random_state: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CohortConfig {
+    pub query: Option<String>,
+}
+
+/// Samples `n_pairs` pairs of rows with different label values and, for
+/// each pair, linearly interpolates their raw feature vectors across
+/// `n_steps` points from one to the other (`t=0`..`t=1`, inclusive) — no PCA,
+/// no inverse transform, since the interpolation already lives in the same
+/// space the model takes as input. `flip_threshold`/`positive_class_label`
+/// aren't consulted here; they're for the evaluation-side flip finder that
+/// consumes the generated grid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlipperConfig {
+    pub n_pairs: usize,
+    pub n_steps: usize,
+    pub flip_threshold: f64,
+    pub positive_class_label: Option<serde_json::Value>,
+    pub random_state: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SimulationConfig {
+    pub blackout: Option<BlackoutConfig>,
+    pub jitter: Option<JitterConfig>,
+    pub cohort: Option<CohortConfig>,
+    pub flipper: Option<FlipperConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimulationVariant {
+    pub x: DataFrame,
+    pub y: Series,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationConfig {
+    pub n_jitter_iters: usize,
+    pub allow_partial: bool,
+    // Note: Callables (metrics) are harder in Rust to serialize,
+    // we might just use a registry or predefined names.
+    pub metrics: Vec<String>,
+    /// Probability threshold for flipper stability (decision-boundary crossing).
+    pub flip_threshold: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricInvariantScores {
+    pub jitter_stability: f64,
+    pub flipper_stability: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricBasedScores {
+    pub resiliency: f64,
+    pub generalizability: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationScores {
+    pub metric_invariant: MetricInvariantScores,
+    pub metric_based: std::collections::HashMap<String, MetricBasedScores>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationResult {
+    pub baselines: std::collections::HashMap<String, f64>,
+    pub evaluations: EvaluationScores,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One model's evaluation, tagged with a caller-supplied label (e.g. an HF
+/// repo id) so a list of these is self-describing about which is which.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabeledEvaluation {
+    pub model_label: String,
+    pub evaluation: EvaluationResult,
+}
+
+/// Any number of models evaluated against the same clean/simulated
+/// datasets, side by side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonResult {
+    pub evaluations: Vec<LabeledEvaluation>,
+}
