@@ -9,7 +9,11 @@ dynamic = ["version"]
 description = "Clinical AI stress-testing: blackout and jitter data simulators, powered by pasteur-core (Rust)"
 readme = "README.md"
 license = "BSD-3-Clause"
-authors = [{ name = "Krv Labs, Inc." }]
+authors = [
+    { name = "Jeremy Wayland", email = "jeremy@krv.ai" },
+    { name = "Sidney Gathrid", email = "sidney@krv.ai" },
+    { name = "Stuart Wayland", email = "stuart@krv.ai" },
+]
 requires-python = ">=3.12"
 dependencies = [
     "polars>=0.20.0"
@@ -21,6 +25,7 @@ classifiers = [
     "Intended Audience :: Healthcare Industry",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]

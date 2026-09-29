@@ -1,4 +1,4 @@
-name: Release Pasteur Core
+name: Release Pasteur
 
 on:
   push:
@@ -9,7 +9,19 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tag and changelog
+        shell: bash
+        run: |
+          version="$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          grep -Fx "## ${version}" CHANGELOG.md
+
   wheels:
+    needs: validate
     name: wheel ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -35,6 +47,7 @@ jobs:
           path: bindings/python-bindings/dist/*.whl
 
   sdist:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +79,7 @@ jobs:
           packages-dir: dist
 
   crates:
+    needs: validate
     runs-on: ubuntu-latest
     environment: crates-io
     steps:
@@ -78,7 +92,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   github-release:
-    needs: [wheels, sdist]
+    needs: [wheels, sdist, pypi, crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write

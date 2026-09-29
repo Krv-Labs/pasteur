@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0
+
 ### Breaking
 
 - **Removed Cloth scaffolding and Node bindings.** Deleted `python-runtime-sdist`

@@ -1709,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "pasteur-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "pasteur-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "polars",
@@ -1736,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "pasteur-hf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dirs",
  "pasteur-core",
@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "pasteur-model"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ort",
  "pasteur-core",
@@ -2581,7 +2581,7 @@ dependencies = [
 
 [[package]]
 name = "pypasteur-bindings"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "pasteur-core",
  "polars",
