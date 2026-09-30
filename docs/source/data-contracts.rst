@@ -33,6 +33,11 @@ One row represents one source sample.
 The original ID is converted to a string, not integer-coerced. A separate
 ``row_ordinal`` records the clean-run row index.
 
+Every column other than the ID is carried into the outputs and sent to the
+model, in file order. Drop outcome, label, and administrative columns before
+running Pasteur, and keep the features in the order the model was trained on.
+The input must be parquet; :doc:`model-selection` shows how to convert a CSV.
+
 Labels
 ------
 
@@ -59,6 +64,9 @@ A source row is positive when its ID parses as an integer and appears in the
 .. warning::
    IDs that do not parse as integers are labeled negative. Validate identifier
    types before evaluating a model.
+
+:doc:`model-selection` includes a short script that builds this file from an
+outcome column.
 
 Model contract
 --------------

@@ -30,7 +30,7 @@ output/
   flipper/flipper.parquet
 ```
 
-Input schemas (clean parquet, `groups.parquet` labels) are documented under "Inputs" in [AGENTS.md](../../../AGENTS.md#inputs).
+Input schemas (clean parquet, `groups.parquet` labels) are documented in [Data Contracts](../../../docs/source/data-contracts.rst).
 
 `flipper/` is only written when `--labels` is passed to `simulate` (flipper needs labels to sample cross-label pairs; blackout/jitter don't). Its parquet also carries meta columns (`pair_id`, `step`, `t`, `source_a_row`, `source_b_row`, `label_a`, `label_b`) alongside the interpolated features — `evaluate`/`compare sim_type=flipper` strip these before scoring.
 

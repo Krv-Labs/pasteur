@@ -148,7 +148,7 @@ pub struct EvaluateArgs {
     pub model: PathBuf,
     /// Model contract sidecar (`metadata.json`). Defaults to
     /// `{model_dir}/metadata.json`; pass an explicit path when the ONNX and
-    /// contract live in different directories (e.g. erdos-reyni staging layout).
+    /// contract live in different directories (e.g. a separate model registry).
     #[arg(long)]
     pub contract: Option<PathBuf>,
     #[arg(long, default_value = "input")]
@@ -181,7 +181,7 @@ pub struct CompareArgs {
     pub models: Vec<PathBuf>,
     /// Model contract sidecar (`metadata.json`). Defaults to
     /// `{model_dir}/metadata.json`; pass an explicit path when the ONNX and
-    /// contract live in different directories (e.g. erdos-reyni staging layout).
+    /// contract live in different directories (e.g. a separate model registry).
     #[arg(long)]
     pub contract: Option<PathBuf>,
     #[arg(long, default_value = "input")]

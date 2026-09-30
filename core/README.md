@@ -1,6 +1,6 @@
 # Pasteur Core
 
-Pure Rust proprietary core. No Python or Node dependencies.
+Pure Rust engine: simulators, evaluators, and result schemas. No Python or Node dependencies.
 
 ## Tests
 

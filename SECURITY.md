@@ -11,6 +11,10 @@ Do not open a public issue or PR for:
 
 We aim to acknowledge reports within 3 business days and will keep you updated until a fix ships.
 
+## Reviewing Pasteur
+
+For data flow, network behaviour, offline installation, and how to handle outputs that contain patient data, see [Security and data handling](https://docs.krv.ai/pasteur/security.html).
+
 ## Supported versions
 
 Security fixes land on the latest released minor version.

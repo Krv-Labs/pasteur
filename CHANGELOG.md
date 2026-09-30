@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Docs
+
+- New pages for hospital IT and model reviewers: security and data handling
+  (data flow, network behaviour, offline install, PHI in outputs), metric
+  definitions and caveats, and an end-to-end model-selection walkthrough.
+- One-page usage overview PDF for IT review.
+- Fixed broken schema links and removed internal references from the READMEs
+  and `--help` text.
+
 ## 0.3.0
 
 First open-source release. Versions 0.1 and 0.2 were internal and are not in

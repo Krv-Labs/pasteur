@@ -1,6 +1,6 @@
 # pasteur-cli
 
-Local-only CLI for Pasteur tabular simulation and evaluation. **No Hugging Face network I/O** — agents use the `hf` CLI for download/upload. See [AGENTS.md](../AGENTS.md).
+Local-only CLI for Pasteur tabular simulation and evaluation. It makes **no network calls**: it reads and writes only the local paths you pass. For a full worked example, see [Choosing between models](../docs/source/model-selection.rst); for metric definitions, see [Reading the results](../docs/source/metrics.rst).
 
 Install:
 
@@ -8,7 +8,7 @@ Install:
 cargo install pasteur-cli
 ```
 
-Input schemas (clean parquet, labels table) are documented under [AGENTS.md → Inputs](../AGENTS.md#inputs).
+Input schemas (clean parquet, labels table) are documented in [Data Contracts](../docs/source/data-contracts.rst). For security and data handling, see [Security](../docs/source/security.rst).
 
 Build from source:
 
@@ -48,7 +48,7 @@ pasteur-cli simulate \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--input` | *(required)* | Local clean parquet |
-| `--labels` | — | Group-membership parquet ([schema](../AGENTS.md#inputs)) for flipper pair sampling (omit to skip flipper) |
+| `--labels` | — | Group-membership parquet ([schema](../docs/source/data-contracts.rst)) for flipper pair sampling (omit to skip flipper) |
 | `--output` | `output` | Root for sim-type folders |
 | `--dataset-name` | — | Provenance label for logs |
 | `--id-col` | `node_id` | Row id column (becomes `source_row_id`) |
@@ -62,7 +62,9 @@ pasteur-cli simulate \
 | `--flipper-steps` | `20` | Interpolation steps per pair |
 | `--random-state` | `42` | RNG seed |
 
-**Output:** `output/<sim_type>/<variant>.parquet` — see [AGENTS.md](../AGENTS.md#on-disk-output-contract).
+The `--id-col`, `--feature`, and `--positive-group-id` defaults come from the example thyroid dataset; always pass them for your own data. `--jitter-scale` is in units of the feature's standard deviation.
+
+**Output:** `output/<sim_type>/<variant>.parquet` — see [Output Layout](../docs/source/outputs.rst).
 
 ---
 
@@ -90,7 +92,7 @@ pasteur-cli card \
 | `--description` | Alternative to JSON description field |
 | `--output-readme` | Default: `<input>/README.md` |
 
-Agent uploads with `hf upload` after this step.
+Uploading is a separate, explicit `hf upload` step outside Pasteur. Only publish simulations of public or synthetic data; bundles made from patient data contain patient identifiers and must not be uploaded (see [AGENTS.md](../AGENTS.md)).
 
 ---
 
@@ -132,18 +134,21 @@ Score multiple local ONNX models; optionally write predictions parquet.
 pasteur-cli compare blackout \
   --sim-root ./sim \
   --labels ./labels/groups.parquet \
-  --model ./models/a/model.onnx \
-  --model ./models/b/model.onnx \
+  --model ./models/a.onnx \
+  --model ./models/b.onnx \
   --predictions-out ./predictions/blackout.parquet \
   --output ./comparison.json
 ```
 
 Same flags as `evaluate`, except:
 
-- `--model` is repeatable (one per model)
-- `--predictions-out` writes local parquet for agent upload
+- `--model` is repeatable (one per model). Models are labelled by file stem, so give each a different file name.
+- `--predictions-out` writes a local per-patient predictions parquet
+- A single `--contract` applies to every model
 
-**Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree`.
+**Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree` (all models on the same side of 0.5).
+
+The `--output` directory must already exist.
 
 ---
 
@@ -187,8 +192,8 @@ A wrong width errors inside ONNX Runtime; a wrong *order* at the right width doe
 not, and every patient silently gets scored against the wrong thresholds.
 
 Pass `--contract /path/to/metadata.json` when the sidecar is not next to the
-model (e.g. erdos-reyni keeps ONNX under `data/models/` and staging metadata under
-`artifacts/staging/`). Otherwise `{model_dir}/metadata.json` is used when present:
+model (for example, when ONNX files and their metadata are stored in separate
+directories). Otherwise `{model_dir}/metadata.json` is used when present:
 
 ```json
 {
@@ -205,8 +210,8 @@ model (e.g. erdos-reyni keeps ONNX under `data/models/` and staging metadata und
 | `input.feature_order` | Compared element-wise against the order derived from the data; a mismatch aborts the run and names the first differing index |
 | `input.absent_sentinel` | Default for `--null-fill` — the value the model was *fit* with standing in for "absent" |
 
-Both keys are optional and unknown keys are ignored, so this is the same file
-`er train` already writes. A model with no sidecar still loads; only its width
+Both keys are optional and unknown keys are ignored, so an existing model
+metadata file can carry them alongside its own fields. A model with no sidecar still loads; only its width
 gets checked, and `--null-fill` falls back to NaN. A sidecar that exists but does
 not parse is an error — a contract nobody can read looks like protection that
 isn't there.

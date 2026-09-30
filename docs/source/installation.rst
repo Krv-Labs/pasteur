@@ -40,7 +40,12 @@ Install the Python bindings
 
    python -m pip install pypasteur
 
-Then import the package:
+The package is ``pypasteur``, which requires CPython 3.12 or newer. The
+``pasteur`` package on PyPI is an unrelated project; do not install it.
+
+The simulators take `polars <https://pola.rs>`_ DataFrames. To start from
+pandas, convert with ``pl.from_pandas(df)``. Always call ``fit`` before
+``transform``:
 
 .. code-block:: python
 
@@ -51,6 +56,7 @@ Then import the package:
    simulator = pypasteur.BlackoutSimulator(
        "glucose",
        rate=0.1,
+       companions=["glucose_measured"],
        random_state=42,
    )
    simulator.fit(frame)
@@ -62,7 +68,7 @@ Build from source
 .. code-block:: bash
 
    git clone https://github.com/Krv-Labs/pasteur.git
-   cd pasteur-core
+   cd pasteur
    cargo build -p pasteur-cli
    cargo test --workspace --locked --exclude pypasteur-bindings
 
@@ -73,7 +79,8 @@ ONNX Runtime
 
 The ``ort`` crate downloads ONNX Runtime at build time. Once built,
 ``pasteur-cli`` performs simulation and evaluation without opening network
-connections.
+connections. For machines without internet access, see
+:ref:`security:Offline installation`.
 
 Publishing is separate
 ----------------------
