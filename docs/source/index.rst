@@ -9,10 +9,6 @@ Pasteur
 .. raw:: html
 
    <div class="pasteur-hero">
-     <div class="pasteur-hero-mark" aria-hidden="true">
-       <img class="pasteur-mark-light" src="_static/pasteur-logo.svg" alt="">
-       <img class="pasteur-mark-dark" src="_static/pasteur-logo-dark.svg" alt="">
-     </div>
      <p class="pasteur-eyebrow">Clinical AI stress testing</p>
      <p class="pasteur-wordmark">Pasteur</p>
      <p class="pasteur-tagline">Find where clinical models become brittle before deployment.</p>
@@ -47,9 +43,23 @@ Pasteur
 
       Interpolate between differently labeled patients and locate decision flips.
 
+.. list-table::
+   :header-rows: 0
+   :widths: 30 70
+
+   * - **100% local**
+     - Runs on your machine's CPU. No server, daemon, or admin rights.
+   * - **No network, no telemetry**
+     - No network calls at runtime. Data, models, and results never leave the
+       machine.
+   * - **Standard tooling**
+     - ``pip install pypasteur`` or ``cargo install pasteur-cli``.
+       BSD-3-Clause open source.
+
 .. note::
-   Pasteur performs local compute only. The CLI does not upload patient data,
-   models, predictions, or simulation outputs.
+   **Reviewing Pasteur for a hospital or health system?** Start with
+   :doc:`security`, or download the
+   :download:`one-page overview (PDF) <_static/pasteur-usage-overview.pdf>`.
 
 What Pasteur produces
 ---------------------
@@ -71,7 +81,7 @@ per-row predictions.
      - Clean, blackout, jitter, and flipper parquets
    * - ``evaluate``
      - Simulation bundle, labels, and one ONNX model
-     - Baseline and resiliency metrics
+     - Baseline and stability metrics (:doc:`metrics`)
    * - ``compare``
      - Simulation bundle and multiple ONNX models
      - Model comparison and optional row-level predictions
@@ -91,7 +101,8 @@ Quick look
      --output ./output
 
 This writes ``clean/``, ``blackout/``, and ``jitter/`` beneath ``./output``.
-Add ``--labels groups.parquet`` to generate flipper pairs.
+Add ``--labels groups.parquet`` to generate flipper pairs. For a complete
+run from CSV to a model comparison, see :doc:`model-selection`.
 
 Designed for evidence, not a pass/fail badge
 --------------------------------------------
@@ -100,6 +111,7 @@ Pasteur does not claim that a model is safe. It produces concrete evidence
 about model behavior under declared perturbations: what changed, where it
 changed, and how strongly. Those results belong alongside intended-use
 documentation, local validation, clinical review, and deployment monitoring.
+Pasteur is a research and evaluation tool, not a medical device.
 
 .. toctree::
    :maxdepth: 1
@@ -115,7 +127,16 @@ documentation, local validation, clinical review, and deployment monitoring.
    :hidden:
 
    simulations
+   Choosing Between Models <model-selection>
+   Reading the Results <metrics>
    CLI Reference <cli>
+
+.. toctree::
+   :maxdepth: 1
+   :caption: For Hospital IT
+   :hidden:
+
+   Security & Data Handling <security>
 
 .. toctree::
    :maxdepth: 1

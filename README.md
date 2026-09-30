@@ -6,40 +6,75 @@ Stress-test clinical AI models before you trust them. Pasteur simulates the ways
 - **Jitter**: measurement noise
 - **Flipper**: interpolation between patients with different labels, to find where a decision flips
 
-This repo contains the Rust engine, the `pasteur-cli` command-line tool, and the `pypasteur` Python bindings. Everything runs locally; no data leaves your machine.
+| | |
+|---|---|
+| **100% local** | Runs on your machine's CPU. No server, daemon, or admin rights. |
+| **No network, no telemetry** | Makes no network calls at runtime. Data, models, and results never leave the machine. |
+| **Standard tooling** | `pip install pypasteur` or `cargo install pasteur-cli`. BSD-3-Clause open source. |
 
-Licensed under [BSD-3-Clause](LICENSE).
+```text
+local parquet + ONNX models  →  Pasteur (CLI or Python)  →  local parquet + JSON metrics
+```
+
+Pasteur produces evidence about model behaviour under declared perturbations, not a pass/fail badge. It is a research and evaluation tool, not a medical device.
+
+**Reviewing Pasteur for your organisation?** Start with [Security and data handling](https://docs.krv.ai/pasteur/security.html) or the [one-page overview (PDF)](docs/source/_static/pasteur-usage-overview.pdf).
 
 ## Install
 
 ```bash
-cargo install pasteur-cli   # CLI
-pip install pypasteur       # Python bindings
+pip install pypasteur       # Python: blackout and jitter simulators (CPython ≥ 3.12)
+cargo install pasteur-cli   # CLI: simulate, evaluate, compare (Rust ≥ 1.95)
 ```
+
+The PyPI package is **`pypasteur`**. The unrelated `pasteur` package on PyPI is a different project.
 
 ## Quickstart
 
-Start from any parquet with an id column and numeric features ([input schemas](AGENTS.md#inputs)):
+Start from a parquet with an integer id column and numeric model features ([input schemas](docs/source/data-contracts.rst)):
 
 ```bash
 pasteur-cli simulate \
-  --input patients.parquet \
+  --input cohort.parquet \
+  --labels groups.parquet \
+  --positive-group-id 1 \
   --id-col patient_id \
-  --feature glucose \
-  --output ./output
+  --feature crp \
+  --blackout-companion crp_measured \
+  --output ./sim
+
+pasteur-cli compare blackout \
+  --sim-root ./sim \
+  --labels groups.parquet \
+  --positive-group-id 1 \
+  --model models/logreg.onnx \
+  --model models/gbm.onnx \
+  --output results-blackout.json
 ```
 
-This writes `output/clean/`, `output/blackout/`, and `output/jitter/`. Pass `--labels` to also produce flipper pairs. Then score an ONNX model against the bundle with `pasteur-cli evaluate`.
+`simulate` writes `sim/clean/`, `sim/blackout/`, `sim/jitter/`, and (with `--labels`) `sim/flipper/`. `compare` scores each ONNX model on the clean and perturbed rows and writes the metrics as JSON. See [Reading the results](https://docs.krv.ai/pasteur/metrics.html) and the [model-selection walkthrough](https://docs.krv.ai/pasteur/model-selection.html).
+
+From Python:
 
 ```python
 import polars as pl
 import pypasteur
 
-df = pl.read_parquet("patients.parquet")
-sim = pypasteur.BlackoutSimulator("glucose", rate=0.1, random_state=42)
-sim.fit(df)
-shifted = sim.transform(df)
+df = pl.read_parquet("cohort.parquet")
+blackout = pypasteur.BlackoutSimulator(
+    "crp", rate=0.2, companions=["crp_measured"], random_state=42
+)
+blackout.fit(df)
+missing = blackout.transform(df)
 ```
+
+## Docs
+
+- Full documentation: [docs.krv.ai/pasteur](https://docs.krv.ai/pasteur/)
+- [Security and data handling](https://docs.krv.ai/pasteur/security.html): data flow, network behaviour, offline install, PHI in outputs
+- [Walkthrough: choosing between models](https://docs.krv.ai/pasteur/model-selection.html)
+- [Reading the results](https://docs.krv.ai/pasteur/metrics.html): metric definitions and caveats
+- [CLI reference](cli/README.md)
 
 ## Workspace
 
@@ -53,14 +88,6 @@ shifted = sim.transform(df)
 
 `pasteur-model` downloads ONNX Runtime at **build** time (the `ort` crate's `download-binaries`). At runtime, `pasteur-cli` never opens a network connection.
 
-## Docs
-
-- Full documentation: [docs.krv.ai/pasteur](https://docs.krv.ai/pasteur/)
-- CLI reference: [docs.krv.ai/pasteur/cli](https://docs.krv.ai/pasteur/cli.html)
-- Agent workflows with the Hugging Face `hf` CLI: [AGENTS.md](AGENTS.md)
-- Simulation bundle and dataset card contracts: [hf/README.md](hf/README.md)
-- Agent skills: [hf-cli](.agents/skills/hf-cli/SKILL.md), [hf-datasets](.agents/skills/hf-datasets/SKILL.md), [pasteur-rs](.agents/skills/pasteur-rs/SKILL.md)
-
 ## Development
 
 ```bash
@@ -70,3 +97,5 @@ cargo test --workspace --exclude pypasteur-bindings
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Pushing a `v*` tag runs `.github/workflows/release.yml`.
+
+Automation: publishing simulations of public or synthetic datasets to Hugging Face is described in [AGENTS.md](AGENTS.md), with agent skills under [`.agents/skills/`](.agents/skills/). Never publish bundles made from patient data.

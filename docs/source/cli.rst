@@ -51,9 +51,19 @@ Important options:
    * - ``--positive-group-id``
      - ``103``
      - Group treated as the positive cohort
+   * - ``--flipper-pairs``
+     - ``200``
+     - Opposite-label patient pairs to sample for flipper
+   * - ``--flipper-steps``
+     - ``20``
+     - Interpolation steps per flipper pair
    * - ``--random-state``
      - ``42``
      - Random seed
+
+The defaults for ``--id-col``, ``--feature``, and ``--positive-group-id``
+come from the example thyroid dataset. Always pass them for your own data.
+``--jitter-scale`` is in units of the feature's standard deviation.
 
 card
 ----
@@ -85,8 +95,46 @@ Score one local ONNX model:
      --output ./scores.json
 
 The positional simulation type can be ``blackout``, ``jitter``, or ``flipper``.
-Use ``--contract`` when the model's ``metadata.json`` is not adjacent to the
-ONNX file.
+Each run loads only that folder; see :doc:`metrics` for which metric to read
+from each.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Option
+     - Default
+     - Purpose
+   * - ``--sim-root``
+     - required
+     - Bundle written by ``simulate``
+   * - ``--labels``
+     - required
+     - Cohort-membership parquet (see :doc:`data-contracts`)
+   * - ``--model``
+     - required
+     - Local ``.onnx`` file
+   * - ``--positive-group-id``
+     - ``103``
+     - Group treated as the positive cohort
+   * - ``--contract``
+     - next to model
+     - Path to ``metadata.json`` when it is not beside the ONNX file
+   * - ``--input-name``
+     - ``input``
+     - Name of the model's input tensor
+   * - ``--null-fill``
+     - see below
+     - Value sent to the model for missing inputs
+   * - ``--positive-class-index``
+     - ``1``
+     - Column of the probability output that is the positive class
+   * - ``--flip-threshold``
+     - ``0.5``
+     - Decision threshold used by flipper stability
+   * - ``-o``, ``--output``
+     - stdout
+     - Write the JSON result to a file. The directory must already exist.
 
 compare
 -------
@@ -103,8 +151,11 @@ Score multiple models over the same variants:
      --predictions-out ./predictions/blackout.parquet \
      --output ./comparison.json
 
-``--model`` is repeatable. ``--predictions-out`` writes one probability column
-per model plus ``all_agree``.
+``compare`` takes the same options as ``evaluate``. ``--model`` is repeatable.
+Models are labelled by file name, so give each one a different name
+(``a.onnx``, ``b.onnx``); two files both called ``model.onnx`` collide.
+``--predictions-out`` writes one probability column per model plus
+``all_agree``. A single ``--contract`` applies to every model.
 
 cache
 -----
@@ -134,6 +185,10 @@ value sentinel:
        "absent_sentinel": 0.0
      }
    }
+
+``--null-fill`` resolves in this order: the flag, then the contract's
+``absent_sentinel``, then NaN. A model that returns NaN probabilities is
+rejected with an error rather than scored.
 
 A declared feature-order mismatch aborts evaluation. If no contract exists,
 Pasteur still checks input width, but it cannot infer feature semantics from

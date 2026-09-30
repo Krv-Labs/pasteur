@@ -5,8 +5,8 @@ use polars::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Sidecar written next to the `.onnx` by whoever trained it (erdos-reyni's
-/// `er train` emits this as `metadata.json`). It is the only thing that can
+/// Sidecar written next to the `.onnx` by whoever trained it, as
+/// `metadata.json`. It is the only thing that can
 /// verify *column order*: the ONNX graph knows how many inputs it takes, not
 /// what they mean. Every field is optional — a model without a sidecar still
 /// loads, just with order unverifiable.

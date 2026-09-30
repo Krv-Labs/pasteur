@@ -76,8 +76,31 @@ The output is organized by simulation type:
    ├── jitter/jitter_2.parquet
    └── flipper/flipper.parquet
 
+Score models
+------------
+
+Score one or more ONNX models against the bundle. Create the results
+directory first:
+
+.. code-block:: bash
+
+   mkdir -p results
+   pasteur-cli compare blackout \
+     --sim-root ./output \
+     --labels groups.parquet \
+     --positive-group-id 1 \
+     --model models/model_a.onnx \
+     --model models/model_b.onnx \
+     --output results/blackout.json
+
+:doc:`model-selection` walks through a full comparison, including exporting
+models to ONNX, and :doc:`metrics` explains every number in the output.
+
 Generate a dataset card
 -----------------------
+
+Only for bundles made from public or synthetic data that you intend to
+publish. Never publish bundles made from patient data.
 
 .. code-block:: bash
 
