@@ -9,10 +9,6 @@ Pasteur
 .. raw:: html
 
    <div class="pasteur-hero">
-     <div class="pasteur-hero-mark" aria-hidden="true">
-       <img class="pasteur-mark-light" src="_static/pasteur-logo.svg" alt="">
-       <img class="pasteur-mark-dark" src="_static/pasteur-logo-dark.svg" alt="">
-     </div>
      <p class="pasteur-eyebrow">Clinical AI stress testing</p>
      <p class="pasteur-wordmark">Pasteur</p>
      <p class="pasteur-tagline">Find where clinical models become brittle before deployment.</p>

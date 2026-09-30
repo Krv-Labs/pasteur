@@ -118,39 +118,6 @@ h4,
   margin: 0 0 1rem;
 }
 
-.pasteur-hero-mark {
-  margin: 0 0 1.5rem;
-  width: clamp(11rem, 30vw, 15rem);
-}
-
-.pasteur-hero-mark img {
-  display: block;
-  height: auto;
-  width: 100%;
-}
-
-.pasteur-hero-mark .pasteur-mark-dark {
-  display: none;
-}
-
-body[data-theme="dark"] .pasteur-hero-mark .pasteur-mark-light {
-  display: none;
-}
-
-body[data-theme="dark"] .pasteur-hero-mark .pasteur-mark-dark {
-  display: block;
-}
-
-@media (prefers-color-scheme: dark) {
-  body:not([data-theme="light"]) .pasteur-hero-mark .pasteur-mark-light {
-    display: none;
-  }
-
-  body:not([data-theme="light"]) .pasteur-hero-mark .pasteur-mark-dark {
-    display: block;
-  }
-}
-
 .pasteur-eyebrow {
   color: var(--docs-accent-ink);
   font-family: var(--font-stack--monospace);
