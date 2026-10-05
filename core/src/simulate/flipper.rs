@@ -121,24 +121,16 @@ impl FlipperSimulator {
                 y.height()
             )));
         }
-        // (label index, negative rows, positive rows) for labels with both.
-        let mut splittable: Vec<(usize, Vec<usize>, Vec<usize>)> = Vec::new();
-        for (k, col) in y.columns().iter().enumerate() {
-            let col = col.cast(&DataType::Float64)?;
-            let col = col.f64()?;
-            let (mut neg, mut pos) = (Vec::new(), Vec::new());
-            for i in 0..col.len() {
-                match col.get(i) {
-                    Some(1.0) => pos.push(i),
-                    Some(_) => neg.push(i),
-                    None => {}
-                }
-            }
-            if !neg.is_empty() && !pos.is_empty() {
-                splittable.push((k, neg, pos));
-            }
-        }
-        if splittable.is_empty() {
+        let splits: Vec<LabelSplit> = y
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(k, col)| LabelSplit::of(k, col))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        if splits.is_empty() {
             return Err(CoreError::InvalidConfig(
                 "FlipperSimulator needs at least one label with both positive and negative rows"
                     .to_string(),
@@ -148,13 +140,19 @@ impl FlipperSimulator {
         let mut rng = self.rng();
         let pairs: Vec<Pair> = (0..self.config.n_pairs)
             .map(|_| {
-                let (k, neg, pos) = splittable.choose(&mut rng).unwrap();
+                let split = splits.choose(&mut rng).expect("splits is non-empty");
                 Pair {
-                    row_a: *neg.choose(&mut rng).unwrap(),
-                    row_b: *pos.choose(&mut rng).unwrap(),
+                    row_a: *split
+                        .negatives
+                        .choose(&mut rng)
+                        .expect("split has negatives"),
+                    row_b: *split
+                        .positives
+                        .choose(&mut rng)
+                        .expect("split has positives"),
                     label_a: 0.0,
                     label_b: 1.0,
-                    pair_label: Some(*k as u32),
+                    pair_label: Some(split.label),
                 }
             })
             .collect();
@@ -191,6 +189,17 @@ impl FlipperSimulator {
 
         let n_steps = self.config.n_steps.max(2);
         let n_pairs = pairs.len();
+        // Grid index columns are u32. Checking the largest index once makes
+        // every `as u32` below lossless.
+        if [x.height(), n_pairs, n_steps]
+            .iter()
+            .any(|&n| u32::try_from(n).is_err())
+        {
+            return Err(CoreError::InvalidConfig(format!(
+                "flipper grid indices must fit in u32: {} rows, {n_pairs} pairs, {n_steps} steps",
+                x.height()
+            )));
+        }
 
         let mut pair_id_col = Vec::with_capacity(n_pairs * n_steps);
         let mut step_col = Vec::with_capacity(n_pairs * n_steps);
@@ -242,6 +251,35 @@ impl FlipperSimulator {
         }
 
         Ok(DataFrame::new(n_rows, columns)?)
+    }
+}
+
+/// One label's rows, split by class; only built for labels that have both.
+struct LabelSplit {
+    label: u32,
+    negatives: Vec<usize>,
+    positives: Vec<usize>,
+}
+
+impl LabelSplit {
+    fn of(label: usize, col: &Column) -> Result<Option<Self>, CoreError> {
+        let col = col.cast(&DataType::Float64)?;
+        let (positives, negatives): (Vec<_>, Vec<_>) = col
+            .f64()?
+            .iter()
+            .enumerate()
+            .filter_map(|(row, v)| Some((row, v?)))
+            .partition(|(_, v)| *v == 1.0);
+        let rows = |split: Vec<(usize, f64)>| split.into_iter().map(|(row, _)| row).collect();
+        let label = u32::try_from(label)
+            .map_err(|e| CoreError::InvalidConfig(format!("label index {label}: {e}")))?;
+        Ok(
+            (!positives.is_empty() && !negatives.is_empty()).then(|| Self {
+                label,
+                negatives: rows(negatives),
+                positives: rows(positives),
+            }),
+        )
     }
 }
 
