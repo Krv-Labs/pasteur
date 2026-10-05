@@ -173,7 +173,7 @@ pub fn score_flipper(
     n_outputs: usize,
     thresholds: &[f64],
 ) -> Result<FlipperScores, CoreError> {
-    let has_pair_label = grid.column(PAIR_LABEL_COL).is_ok();
+    let has_pair_label = grid.get_column_index(PAIR_LABEL_COL).is_some();
     if has_pair_label != (task == TaskType::Multilabel) {
         return Err(CoreError::InvalidConfig(format!(
             "flipper grid was generated for {} pairs but this is a {task} evaluation; \
@@ -186,49 +186,38 @@ pub fn score_flipper(
         )));
     }
     let features = flipper_model_features(grid)?;
-    let probs = predict_matrix(model, &features, n_outputs)?;
+    let mut probs = predict_matrix(model, &features, n_outputs)?;
 
-    if task.is_binary() {
-        let preds = Series::new("pred".into(), probs[0].clone());
-        let results = find_flip_points(grid, &preds, thresholds[0])?;
-        let stability = calculate_flipper_stability(&results);
-        return Ok(FlipperScores {
-            stability,
-            never_flipped: never_flipped(&results),
-            per_label: vec![Some(stability)],
-            detour_rate: None,
-        });
-    }
-
-    let pair_labels: Vec<Vec<usize>> = match task {
+    // Each pair's labels and, per grid row, a score that crosses 0 exactly
+    // where the decision changes.
+    let (pair_labels, crossing): (Vec<Vec<usize>>, Vec<f64>) = match task {
+        TaskType::Binary => {
+            let preds = Series::new("pred".into(), probs.swap_remove(0));
+            let results = find_flip_points(grid, &preds, thresholds[0])?;
+            let stability = calculate_flipper_stability(&results);
+            return Ok(FlipperScores {
+                stability,
+                never_flipped: never_flipped(&results),
+                per_label: vec![Some(stability)],
+                detour_rate: None,
+            });
+        }
         TaskType::Multiclass => {
-            let a = class_indices(grid, LABEL_A_COL, n_outputs)?;
-            let b = class_indices(grid, LABEL_B_COL, n_outputs)?;
-            a.into_iter().zip(b).map(|(a, b)| vec![a, b]).collect()
-        }
-        _ => {
-            let column = grid.column(PAIR_LABEL_COL).map_err(|_| {
-                CoreError::InvalidConfig(format!(
-                    "flipper grid has no `{PAIR_LABEL_COL}` column; regenerate it with \
-                     `simulate --task multilabel` so each pair records the label it crosses"
-                ))
-            })?;
-            class_indices_from(column.as_materialized_series(), PAIR_LABEL_COL, n_outputs)?
+            let class_a = class_indices(grid, LABEL_A_COL, n_outputs)?;
+            let class_b = class_indices(grid, LABEL_B_COL, n_outputs)?;
+            class_a
                 .into_iter()
-                .map(|k| vec![k])
-                .collect()
+                .zip(class_b)
+                .enumerate()
+                .map(|(row, (a, b))| (vec![a, b], probs[b][row] - probs[a][row]))
+                .unzip()
         }
+        TaskType::Multilabel => class_indices(grid, PAIR_LABEL_COL, n_outputs)?
+            .into_iter()
+            .enumerate()
+            .map(|(row, k)| (vec![k], probs[k][row] - thresholds[k]))
+            .unzip(),
     };
-
-    let crossing: Vec<f64> = (0..grid.height())
-        .map(|i| match task {
-            TaskType::Multiclass => probs[pair_labels[i][1]][i] - probs[pair_labels[i][0]][i],
-            _ => {
-                let k = pair_labels[i][0];
-                probs[k][i] - thresholds[k]
-            }
-        })
-        .collect();
     let results = find_flip_points(grid, &Series::new("crossing".into(), crossing), 0.0)?;
 
     // Every row of a pair carries the same labels; take the first.
@@ -291,12 +280,10 @@ fn detour_rate(
     detoured.len() as f64 / n_pairs as f64
 }
 
+/// A grid column of class or label indices, each checked to be a whole
+/// number below `n_outputs`.
 fn class_indices(grid: &DataFrame, col: &str, n_outputs: usize) -> Result<Vec<usize>, CoreError> {
-    class_indices_from(grid.column(col)?.as_materialized_series(), col, n_outputs)
-}
-
-fn class_indices_from(s: &Series, col: &str, n_outputs: usize) -> Result<Vec<usize>, CoreError> {
-    series_to_f64(s)?
+    series_to_f64(grid.column(col)?.as_materialized_series())?
         .into_iter()
         .map(|v| {
             if v.fract() == 0.0 && v >= 0.0 && (v as usize) < n_outputs {

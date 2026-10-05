@@ -8,10 +8,17 @@ pub const JITTER_STABILITY_ALPHA: f64 = 100.0;
 /// two jitter variants to have any variance to measure; with fewer, there's
 /// nothing to compare and stability is reported as perfect (1.0).
 pub fn calculate_jitter_stability(preds: &[Series], alpha: f64) -> Result<f64, CoreError> {
-    Ok(match mean_jitter_variance(preds)? {
-        Some(v) => 1.0 / (1.0 + alpha * v),
-        None => 1.0,
-    })
+    Ok(squash_jitter_variance(mean_jitter_variance(preds)?, alpha))
+}
+
+/// `1 / (1 + alpha * v)` at the default alpha; perfect (1.0) when there is
+/// no variance to measure.
+pub(crate) fn jitter_stability_from_variance(variance: Option<f64>) -> f64 {
+    squash_jitter_variance(variance, JITTER_STABILITY_ALPHA)
+}
+
+fn squash_jitter_variance(variance: Option<f64>, alpha: f64) -> f64 {
+    variance.map_or(1.0, |v| 1.0 / (1.0 + alpha * v))
 }
 
 /// The `mean_variance` inside `calculate_jitter_stability`, exposed so that
