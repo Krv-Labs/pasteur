@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Added
+
+- **Multiclass and multilabel models.** `metadata.json` gains `task_type`
+  (`binary` | `multiclass` | `multilabel`) and `output.{name, classes,
+  thresholds}`. `simulate`, `evaluate`, and `compare` take `--task`, and
+  `--positive-group-id` is repeatable (one cohort per model output, in
+  `output.classes` order). All sklearn-onnx probability formats are read:
+  `[n, K]` tensors, ZipMaps with int or string keys (matched to `classes` by
+  name), and `MultiOutputClassifier`'s per-label tensor sequence.
+- Every metric is computed per class/label; headline fields are macro
+  averages. A new `multi` section in the result JSON reports micro ROC AUC,
+  worst-label resiliency, a jitter decision-flip rate, the share of flipper
+  pairs that never flip, the multiclass detour rate, labels excluded for
+  having one class, and per-label scores. Binary output has no `multi` key.
+- Multiclass flipper finds where the pairwise margin `p[b] − p[a]` crosses 0;
+  multilabel flipper samples pairs per label (new `pair_label` grid column)
+  and crosses each label's own threshold.
+
+### Changed
+
+- **Breaking (library):** `Model::predict_proba` returns a `DataFrame` with
+  one column per output, `SimulationVariant.y` is a `DataFrame` label matrix,
+  `EvaluationConfig` gains `task`, and `OnnxModel::from_file` takes
+  `positive_class_index: Option<usize>`. CLI usage for binary models is
+  unchanged.
+- **ROC AUC handles tied scores.** Ties count half (Mann–Whitney) instead of
+  depending on row order. Results without ties agree with the previous
+  implementation to floating-point rounding.
+- The probability output is resolved when the model loads. A model without
+  `output_probability`/`probabilities` (or the contract's `output.name`) now
+  fails at load with the list of its real outputs, instead of at first
+  prediction.
+- `compare` refuses two `--model` files with the same file name instead of
+  panicking on duplicate prediction columns.
+
 ### Docs
 
 - New pages for hospital IT and model reviewers: security and data handling
