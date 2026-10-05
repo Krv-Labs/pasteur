@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use pasteur_core::{is_flipper_meta_column, EvaluationConfig, SimulationVariant};
+use pasteur_core::{is_flipper_meta_column, EvaluationConfig, SimulationVariant, TaskType};
 use pasteur_hf::layout;
 use polars::prelude::*;
 
-use crate::data::labels::derive_labels_from_file;
+use crate::data::labels::derive_label_matrix;
 use crate::io::read_parquet;
 
 pub struct EvaluationInputs {
@@ -22,12 +22,13 @@ pub fn build_evaluation_inputs(
     sim_root: &Path,
     sim_type: &str,
     labels_path: &Path,
-    positive_group_id: u32,
+    group_ids: &[u32],
+    task: TaskType,
     dataset_name: &str,
     flip_threshold: f64,
 ) -> Result<EvaluationInputs> {
     let (clean_df, source_row_id, feature_order) = load_clean_baseline(sim_root)?;
-    let labels = derive_labels_from_file(labels_path, positive_group_id, &source_row_id)?;
+    let labels = derive_label_matrix(labels_path, group_ids, task, &source_row_id)?;
     let clean = SimulationVariant {
         x: feature_columns(&clean_df)?,
         y: labels.clone(),
@@ -55,6 +56,7 @@ pub fn build_evaluation_inputs(
         allow_partial: true,
         metrics: vec!["roc_auc".to_string()],
         flip_threshold,
+        task,
     };
 
     Ok(EvaluationInputs {
@@ -121,16 +123,25 @@ fn load_simulation_variants(
     variant_files: &[PathBuf],
     sim_type: &str,
     dataset_name: &str,
-    labels: &Series,
+    labels: &DataFrame,
 ) -> Result<HashMap<String, HashMap<String, SimulationVariant>>> {
     let mut simulation_variants = HashMap::new();
     for path in variant_files {
         let name = variant_name(path, sim_type);
         let df = read_parquet(path)?;
         let (x, y) = if sim_type == "flipper" {
-            let placeholder =
-                Int64Chunked::from_vec("label".into(), vec![0i64; df.height()]).into_series();
-            (df, placeholder)
+            // Grid rows are synthetic patients with no label of their own.
+            let placeholder: Vec<Column> = labels
+                .get_column_names()
+                .iter()
+                .map(|name| {
+                    Int64Chunked::from_vec((*name).clone(), vec![0i64; df.height()])
+                        .into_series()
+                        .into()
+                })
+                .collect();
+            let height = df.height();
+            (df, DataFrame::new(height, placeholder)?)
         } else {
             (feature_columns(&df)?, labels.clone())
         };

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use pasteur_core::TaskType;
 
 #[derive(Parser)]
 #[command(
@@ -24,6 +25,27 @@ pub enum Command {
     Compare(CompareArgs),
     /// List, remove, or clear the local Pasteur staging cache.
     Cache(CacheArgs),
+}
+
+/// Mirrors `pasteur_core::TaskType` for clap.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum TaskArg {
+    /// One positive cohort; the model scores one positive-class column.
+    Binary,
+    /// One cohort per class; every row belongs to exactly one.
+    Multiclass,
+    /// One cohort per label; rows may belong to any number.
+    Multilabel,
+}
+
+impl From<TaskArg> for TaskType {
+    fn from(t: TaskArg) -> Self {
+        match t {
+            TaskArg::Binary => TaskType::Binary,
+            TaskArg::Multiclass => TaskType::Multiclass,
+            TaskArg::Multilabel => TaskType::Multilabel,
+        }
+    }
 }
 
 #[derive(clap::Args)]
@@ -103,8 +125,15 @@ pub struct SimulateArgs {
     /// Group/cohort membership table used to derive labels for flipper pair sampling.
     #[arg(long)]
     pub labels: Option<PathBuf>,
-    #[arg(long, default_value_t = 103)]
-    pub positive_group_id: u32,
+    /// Cohort `group_id` defining the labels. Binary takes one (the positive
+    /// cohort); multiclass and multilabel take one per model output, repeated
+    /// in the model's `output.classes` order.
+    #[arg(long = "positive-group-id", default_values_t = [103u32])]
+    pub positive_group_ids: Vec<u32>,
+    /// `binary`, `multiclass`, or `multilabel`; must match each model's
+    /// `metadata.json` `task_type`.
+    #[arg(long, value_enum, default_value_t = TaskArg::Binary)]
+    pub task: TaskArg,
     #[arg(long, default_value_t = 200)]
     pub flipper_pairs: usize,
     #[arg(long, default_value_t = 20)]
@@ -158,12 +187,24 @@ pub struct EvaluateArgs {
     /// else NaN — `0.0` TSH is not absence, it is a hyperthyroid signal.
     #[arg(long)]
     pub null_fill: Option<f32>,
-    #[arg(long, default_value_t = 1)]
-    pub positive_class_index: usize,
-    #[arg(long, default_value_t = 103)]
-    pub positive_group_id: u32,
+    /// Binary models only: which output column is the positive class
+    /// (default 1).
+    #[arg(long)]
+    pub positive_class_index: Option<usize>,
+    /// Cohort `group_id` defining the labels. Binary takes one (the positive
+    /// cohort); multiclass and multilabel take one per model output, repeated
+    /// in the model's `output.classes` order.
+    #[arg(long = "positive-group-id", default_values_t = [103u32])]
+    pub positive_group_ids: Vec<u32>,
+    /// `binary`, `multiclass`, or `multilabel`; must match each model's
+    /// `metadata.json` `task_type`.
+    #[arg(long, value_enum, default_value_t = TaskArg::Binary)]
+    pub task: TaskArg,
     #[arg(long, default_value = "simulation")]
     pub dataset_name: String,
+    /// Decision threshold for flipper crossings: the positive-class
+    /// probability for binary models, every label without a contract
+    /// `output.thresholds` for multilabel. Unused for multiclass (argmax).
     #[arg(long, default_value_t = 0.5)]
     pub flip_threshold: f64,
     #[arg(short, long)]
@@ -191,12 +232,24 @@ pub struct CompareArgs {
     /// else NaN — `0.0` TSH is not absence, it is a hyperthyroid signal.
     #[arg(long)]
     pub null_fill: Option<f32>,
-    #[arg(long, default_value_t = 1)]
-    pub positive_class_index: usize,
-    #[arg(long, default_value_t = 103)]
-    pub positive_group_id: u32,
+    /// Binary models only: which output column is the positive class
+    /// (default 1).
+    #[arg(long)]
+    pub positive_class_index: Option<usize>,
+    /// Cohort `group_id` defining the labels. Binary takes one (the positive
+    /// cohort); multiclass and multilabel take one per model output, repeated
+    /// in the model's `output.classes` order.
+    #[arg(long = "positive-group-id", default_values_t = [103u32])]
+    pub positive_group_ids: Vec<u32>,
+    /// `binary`, `multiclass`, or `multilabel`; must match each model's
+    /// `metadata.json` `task_type`.
+    #[arg(long, value_enum, default_value_t = TaskArg::Binary)]
+    pub task: TaskArg,
     #[arg(long, default_value = "simulation")]
     pub dataset_name: String,
+    /// Decision threshold for flipper crossings: the positive-class
+    /// probability for binary models, every label without a contract
+    /// `output.thresholds` for multilabel. Unused for multiclass (argmax).
     #[arg(long, default_value_t = 0.5)]
     pub flip_threshold: f64,
     #[arg(short, long)]

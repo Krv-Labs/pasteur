@@ -11,7 +11,8 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         &args.sim_root,
         &args.sim_type,
         &args.labels,
-        args.positive_group_id,
+        &args.positive_group_ids,
+        args.task.into(),
         &args.dataset_name,
         args.flip_threshold,
     )?;
@@ -24,6 +25,7 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         args.positive_class_index,
         args.null_fill,
         args.contract.as_deref(),
+        args.task.into(),
     )?;
 
     let evaluator = Evaluator::new();
