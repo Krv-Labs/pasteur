@@ -55,6 +55,13 @@ impl PredictionRows {
         models: &[(String, OnnxModel)],
     ) -> Result<()> {
         let n = variant.x.height();
+        let k = self.classes.len();
+        if variant.y.width() != k {
+            anyhow::bail!(
+                "{name} has {} label columns for {k} model outputs",
+                variant.y.width()
+            );
+        }
         let ids = variant_source_row_ids(variant, &inputs.source_row_id)?;
         let id_strings = ids.str()?;
         let x = model_feature_frame(variant, &inputs.feature_order)?;
@@ -71,6 +78,9 @@ impl PredictionRows {
         }
         for (preds, (_, model)) in self.per_model_preds.iter_mut().zip(models) {
             let frame = model.predict_proba(&x)?;
+            if frame.width() != k {
+                anyhow::bail!("model returned {} columns for {k} outputs", frame.width());
+            }
             for (out, col) in preds.iter_mut().zip(frame.columns()) {
                 let col = col.cast(&DataType::Float64)?;
                 let col = col.f64()?;

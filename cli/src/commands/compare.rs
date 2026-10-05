@@ -50,12 +50,6 @@ fn load_models(args: &CompareArgs, feature_order: &[String]) -> Result<Vec<(Stri
     let mut models: Vec<(String, OnnxModel)> = Vec::with_capacity(args.models.len());
     for model_path in &args.models {
         let label = model_label(model_path);
-        if models.iter().any(|(existing, _)| *existing == label) {
-            anyhow::bail!(
-                "two --model files are both named {label:?}; per-model columns and results are \
-                 keyed by file name, so rename one"
-            );
-        }
         let model = load_model(
             model_path,
             &args.input_name,
@@ -65,17 +59,31 @@ fn load_models(args: &CompareArgs, feature_order: &[String]) -> Result<Vec<(Stri
             args.contract.as_deref(),
             args.task.into(),
         )?;
-        if let Some((first_label, first)) = models.first() {
-            if model.output_columns() != first.output_columns() {
-                anyhow::bail!(
-                    "{label} outputs {:?} but {first_label} outputs {:?}; compared models must \
-                     share one class order",
-                    model.output_columns(),
-                    first.output_columns()
-                );
-            }
-        }
+        check_comparable(&models, &label, &model)?;
         models.push((label, model));
     }
     Ok(models)
+}
+
+/// Results and prediction columns are keyed by model file name and read in
+/// one class order, so a model joining the comparison must have a new name
+/// and the same output columns as the models already loaded.
+fn check_comparable(loaded: &[(String, OnnxModel)], label: &str, model: &OnnxModel) -> Result<()> {
+    if loaded.iter().any(|(existing, _)| existing == label) {
+        anyhow::bail!(
+            "two --model files are both named {label:?}; per-model columns and results are \
+             keyed by file name, so rename one"
+        );
+    }
+    match loaded.first() {
+        Some((first_label, first)) if model.output_columns() != first.output_columns() => {
+            anyhow::bail!(
+                "{label} outputs {:?} but {first_label} outputs {:?}; compared models must \
+                 share one class order",
+                model.output_columns(),
+                first.output_columns()
+            )
+        }
+        _ => Ok(()),
+    }
 }

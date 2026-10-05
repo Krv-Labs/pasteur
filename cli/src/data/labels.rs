@@ -18,23 +18,7 @@ pub fn derive_label_matrix(
     task: TaskType,
     source_row_ids: &Series,
 ) -> Result<DataFrame> {
-    let mut unique = group_ids.to_vec();
-    unique.sort_unstable();
-    unique.dedup();
-    if unique.len() != group_ids.len() {
-        anyhow::bail!("--positive-group-id lists a group more than once: {group_ids:?}");
-    }
-    match (task, group_ids.len()) {
-        (TaskType::Binary, 1) => {}
-        (TaskType::Binary, n) => anyhow::bail!(
-            "binary evaluation takes one --positive-group-id, got {n}; pass --task multiclass \
-             or --task multilabel for more"
-        ),
-        (TaskType::Multiclass, n) if n < 2 => anyhow::bail!(
-            "multiclass needs one --positive-group-id per class (at least two), got {n}"
-        ),
-        _ => {}
-    }
+    check_group_ids(task, group_ids)?;
 
     let groups = read_parquet(labels_path)?;
     let ids = groups.column("group_id")?.u32()?;
@@ -43,10 +27,9 @@ pub fn derive_label_matrix(
         .map(|&gid| {
             let row_idx = find_positive_group_row(ids, gid, labels_path)?;
             let member_ids = load_member_ids(&groups, row_idx)?;
-            let name = if task.is_binary() {
-                "label".to_string()
-            } else {
-                format!("group_{gid}")
+            let name = match task {
+                TaskType::Binary => "label".to_string(),
+                TaskType::Multiclass | TaskType::Multilabel => format!("group_{gid}"),
             };
             Ok(labels_for_rows(source_row_ids, &member_ids)
                 .with_name(name.as_str().into())
@@ -58,6 +41,23 @@ pub fn derive_label_matrix(
         check_one_class_per_row(&y, source_row_ids, group_ids)?;
     }
     Ok(y)
+}
+
+fn check_group_ids(task: TaskType, group_ids: &[u32]) -> Result<()> {
+    if group_ids.iter().collect::<HashSet<_>>().len() != group_ids.len() {
+        anyhow::bail!("--positive-group-id lists a group more than once: {group_ids:?}");
+    }
+    match (task, group_ids.len()) {
+        (TaskType::Binary, 1) | (TaskType::Multilabel, _) => Ok(()),
+        (TaskType::Binary, n) => anyhow::bail!(
+            "binary evaluation takes one --positive-group-id, got {n}; pass --task multiclass \
+             or --task multilabel for more"
+        ),
+        (TaskType::Multiclass, n) if n < 2 => anyhow::bail!(
+            "multiclass needs one --positive-group-id per class (at least two), got {n}"
+        ),
+        (TaskType::Multiclass, _) => Ok(()),
+    }
 }
 
 /// Class index per row of a one-hot multiclass label matrix.
@@ -88,38 +88,41 @@ fn check_one_class_per_row(
         .map(|c| c.i64())
         .collect::<PolarsResult<_>>()?;
     let ids = source_row_ids.str()?;
-    let (mut none, mut several) = (Vec::new(), Vec::new());
-    for i in 0..y.height() {
-        let n: i64 = cols.iter().map(|c| c.get(i).unwrap_or(0)).sum();
-        let id = ids.get(i).unwrap_or("").to_string();
-        match n {
-            0 => none.push(id),
-            1 => {}
-            _ => several.push(id),
-        }
+    let groups_of_row = |i: usize| -> i64 { cols.iter().map(|c| c.get(i).unwrap_or(0)).sum() };
+    let ids_where = |keep: fn(i64) -> bool| -> Vec<&str> {
+        (0..y.height())
+            .filter(|&i| keep(groups_of_row(i)))
+            .map(|i| ids.get(i).unwrap_or(""))
+            .collect()
+    };
+    let sample = |rows: &[&str]| rows[..rows.len().min(5)].join(", ");
+
+    let mut problems = Vec::new();
+    let in_none = ids_where(|n| n == 0);
+    if !in_none.is_empty() {
+        problems.push(format!(
+            "{} row(s) are in no group (e.g. {}) — add a group for the remaining class, and \
+             check IDs are integers",
+            in_none.len(),
+            sample(&in_none)
+        ));
     }
-    if none.is_empty() && several.is_empty() {
+    let in_several = ids_where(|n| n > 1);
+    if !in_several.is_empty() {
+        problems.push(format!(
+            "{} row(s) are in several groups (e.g. {}) — overlapping cohorts are \
+             multilabel (--task multilabel)",
+            in_several.len(),
+            sample(&in_several)
+        ));
+    }
+    if problems.is_empty() {
         return Ok(());
     }
-    let sample = |v: &[String]| v.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-    let mut msg = format!("multiclass labels from groups {group_ids:?} are not one class per row:");
-    if !none.is_empty() {
-        msg += &format!(
-            " {} row(s) are in no group (e.g. {}) — add a group for the remaining class, and \
-             check IDs are integers;",
-            none.len(),
-            sample(&none)
-        );
-    }
-    if !several.is_empty() {
-        msg += &format!(
-            " {} row(s) are in several groups (e.g. {}) — overlapping cohorts are \
-             multilabel (--task multilabel);",
-            several.len(),
-            sample(&several)
-        );
-    }
-    anyhow::bail!(msg.trim_end_matches(';').to_string())
+    anyhow::bail!(
+        "multiclass labels from groups {group_ids:?} are not one class per row: {}",
+        problems.join("; ")
+    )
 }
 
 fn find_positive_group_row(
