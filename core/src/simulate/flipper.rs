@@ -11,8 +11,11 @@ pub const SOURCE_A_ROW_COL: &str = "source_a_row";
 pub const SOURCE_B_ROW_COL: &str = "source_b_row";
 pub const LABEL_A_COL: &str = "label_a";
 pub const LABEL_B_COL: &str = "label_b";
+/// Multilabel grids only: index of the label the pair was sampled across.
+pub const PAIR_LABEL_COL: &str = "pair_label";
 
 /// Meta columns written by `generate` and required by flipper evaluation.
+/// `generate_multilabel` also writes `PAIR_LABEL_COL`.
 pub const FLIPPER_META_COLS: [&str; 7] = [
     PAIR_ID_COL,
     STEP_COL,
@@ -24,7 +27,7 @@ pub const FLIPPER_META_COLS: [&str; 7] = [
 ];
 
 pub fn is_flipper_meta_column(name: &str) -> bool {
-    FLIPPER_META_COLS.contains(&name)
+    FLIPPER_META_COLS.contains(&name) || name == PAIR_LABEL_COL
 }
 
 /// Generates synthetic "patients" by sampling pairs of real rows with
@@ -65,6 +68,107 @@ impl FlipperSimulator {
             )));
         }
 
+        let label_groups = group_rows_by_label(y)?;
+        // Sorted for determinism: HashMap iteration order isn't guaranteed
+        // stable across separately-constructed maps with the same content,
+        // which would otherwise make key_a/key_b assignment (and hence
+        // source_a/source_b) non-reproducible across runs with the same seed.
+        let mut label_keys: Vec<String> = label_groups.keys().cloned().collect();
+        label_keys.sort();
+        if label_keys.len() < 2 {
+            return Err(CoreError::InvalidConfig(
+                "FlipperSimulator needs at least two distinct label values to pair across"
+                    .to_string(),
+            ));
+        }
+        let y_f64 = y.cast(&DataType::Float64)?;
+        let y_f64 = y_f64.f64()?;
+
+        let mut rng = self.rng();
+        let pairs: Vec<Pair> = (0..self.config.n_pairs)
+            .map(|_| {
+                let (key_a, key_b) = pick_two_distinct_labels(&label_keys, &mut rng);
+                let row_a = *label_groups[&key_a].choose(&mut rng).unwrap();
+                let row_b = *label_groups[&key_b].choose(&mut rng).unwrap();
+                Pair {
+                    row_a,
+                    row_b,
+                    label_a: y_f64.get(row_a).unwrap_or(f64::NAN),
+                    label_b: y_f64.get(row_b).unwrap_or(f64::NAN),
+                    pair_label: None,
+                }
+            })
+            .collect();
+        self.interpolate(x, &pairs)
+    }
+
+    /// Multilabel counterpart of `generate`. A "different label" between two
+    /// multi-hot rows is ambiguous — grouping by the whole label set scatters
+    /// patients into tiny groups — so each pair is sampled *for one label*:
+    /// pick a label `k` (uniformly among labels with both positive and
+    /// negative rows), then a `k`-negative row `a` and a `k`-positive row `b`.
+    /// `label_a`/`label_b` are those rows' values for `k` (0 and 1), and the
+    /// extra `pair_label` column records `k`.
+    pub fn generate_multilabel(
+        &self,
+        x: &DataFrame,
+        y: &DataFrame,
+    ) -> Result<DataFrame, CoreError> {
+        if x.height() != y.height() {
+            return Err(CoreError::InvalidConfig(format!(
+                "x has {} rows but y has {} — must match",
+                x.height(),
+                y.height()
+            )));
+        }
+        // (label index, negative rows, positive rows) for labels with both.
+        let mut splittable: Vec<(usize, Vec<usize>, Vec<usize>)> = Vec::new();
+        for (k, col) in y.columns().iter().enumerate() {
+            let col = col.cast(&DataType::Float64)?;
+            let col = col.f64()?;
+            let (mut neg, mut pos) = (Vec::new(), Vec::new());
+            for i in 0..col.len() {
+                match col.get(i) {
+                    Some(1.0) => pos.push(i),
+                    Some(_) => neg.push(i),
+                    None => {}
+                }
+            }
+            if !neg.is_empty() && !pos.is_empty() {
+                splittable.push((k, neg, pos));
+            }
+        }
+        if splittable.is_empty() {
+            return Err(CoreError::InvalidConfig(
+                "FlipperSimulator needs at least one label with both positive and negative rows"
+                    .to_string(),
+            ));
+        }
+
+        let mut rng = self.rng();
+        let pairs: Vec<Pair> = (0..self.config.n_pairs)
+            .map(|_| {
+                let (k, neg, pos) = splittable.choose(&mut rng).unwrap();
+                Pair {
+                    row_a: *neg.choose(&mut rng).unwrap(),
+                    row_b: *pos.choose(&mut rng).unwrap(),
+                    label_a: 0.0,
+                    label_b: 1.0,
+                    pair_label: Some(*k as u32),
+                }
+            })
+            .collect();
+        self.interpolate(x, &pairs)
+    }
+
+    fn rng(&self) -> StdRng {
+        match self.config.random_state {
+            Some(seed) => StdRng::seed_from_u64(seed),
+            None => StdRng::from_entropy(),
+        }
+    }
+
+    fn interpolate(&self, x: &DataFrame, pairs: &[Pair]) -> Result<DataFrame, CoreError> {
         let feature_cols: Vec<String> = x
             .columns()
             .iter()
@@ -85,28 +189,8 @@ impl FlipperSimulator {
             })
             .collect::<Result<_, PolarsError>>()?;
 
-        let label_groups = group_rows_by_label(y)?;
-        // Sorted for determinism: HashMap iteration order isn't guaranteed
-        // stable across separately-constructed maps with the same content,
-        // which would otherwise make key_a/key_b assignment (and hence
-        // source_a/source_b) non-reproducible across runs with the same seed.
-        let mut label_keys: Vec<String> = label_groups.keys().cloned().collect();
-        label_keys.sort();
-        if label_keys.len() < 2 {
-            return Err(CoreError::InvalidConfig(
-                "FlipperSimulator needs at least two distinct label values to pair across"
-                    .to_string(),
-            ));
-        }
-        let y_f64 = y.cast(&DataType::Float64)?;
-        let y_f64 = y_f64.f64()?;
-
-        let mut rng = match self.config.random_state {
-            Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_entropy(),
-        };
         let n_steps = self.config.n_steps.max(2);
-        let n_pairs = self.config.n_pairs;
+        let n_pairs = pairs.len();
 
         let mut pair_id_col = Vec::with_capacity(n_pairs * n_steps);
         let mut step_col = Vec::with_capacity(n_pairs * n_steps);
@@ -115,30 +199,26 @@ impl FlipperSimulator {
         let mut source_b_col = Vec::with_capacity(n_pairs * n_steps);
         let mut label_a_col = Vec::with_capacity(n_pairs * n_steps);
         let mut label_b_col = Vec::with_capacity(n_pairs * n_steps);
+        let mut pair_label_col = Vec::with_capacity(n_pairs * n_steps);
         let mut feature_data: Vec<Vec<f64>> = feature_cols
             .iter()
             .map(|_| Vec::with_capacity(n_pairs * n_steps))
             .collect();
 
-        for pair_id in 0..n_pairs {
-            let (key_a, key_b) = pick_two_distinct_labels(&label_keys, &mut rng);
-            let row_a = *label_groups[&key_a].choose(&mut rng).unwrap();
-            let row_b = *label_groups[&key_b].choose(&mut rng).unwrap();
-            let label_a = y_f64.get(row_a).unwrap_or(f64::NAN);
-            let label_b = y_f64.get(row_b).unwrap_or(f64::NAN);
-
+        for (pair_id, pair) in pairs.iter().enumerate() {
             for step in 0..n_steps {
                 let t = step as f64 / (n_steps - 1) as f64;
                 pair_id_col.push(pair_id as u32);
                 step_col.push(step as u32);
                 t_col.push(t);
-                source_a_col.push(row_a as u32);
-                source_b_col.push(row_b as u32);
-                label_a_col.push(label_a);
-                label_b_col.push(label_b);
+                source_a_col.push(pair.row_a as u32);
+                source_b_col.push(pair.row_b as u32);
+                label_a_col.push(pair.label_a);
+                label_b_col.push(pair.label_b);
+                pair_label_col.push(pair.pair_label.unwrap_or(0));
                 for (j, ca) in feature_series.iter().enumerate() {
-                    let a_val = ca.get(row_a).unwrap_or(f64::NAN);
-                    let b_val = ca.get(row_b).unwrap_or(f64::NAN);
+                    let a_val = ca.get(pair.row_a).unwrap_or(f64::NAN);
+                    let b_val = ca.get(pair.row_b).unwrap_or(f64::NAN);
                     feature_data[j].push(a_val + t * (b_val - a_val));
                 }
             }
@@ -154,12 +234,23 @@ impl FlipperSimulator {
             Series::new(LABEL_A_COL.into(), label_a_col).into(),
             Series::new(LABEL_B_COL.into(), label_b_col).into(),
         ];
+        if pairs.iter().any(|p| p.pair_label.is_some()) {
+            columns.push(Series::new(PAIR_LABEL_COL.into(), pair_label_col).into());
+        }
         for (name, data) in feature_cols.into_iter().zip(feature_data) {
             columns.push(Series::new(name.into(), data).into());
         }
 
         Ok(DataFrame::new(n_rows, columns)?)
     }
+}
+
+struct Pair {
+    row_a: usize,
+    row_b: usize,
+    label_a: f64,
+    label_b: f64,
+    pair_label: Option<u32>,
 }
 
 fn group_rows_by_label(y: &Series) -> Result<HashMap<String, Vec<usize>>, CoreError> {
