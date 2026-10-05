@@ -68,123 +68,116 @@ struct OutputSpec {
 
 /// `outputs` lists the graph's outputs with their static trailing dimension
 /// when the graph declares one.
-fn resolve_output_spec(
+fn resolve_output_name(
     contract_label: &str,
-    contract: Option<&ModelContract>,
-    positive_class_index: Option<usize>,
+    declared: Option<&ContractOutput>,
     outputs: &[(String, Option<usize>)],
-) -> Result<OutputSpec, CoreError> {
-    let task = contract.map(|c| c.task_type).unwrap_or_default();
-    let declared = contract.map(|c| &c.output);
-    let invalid = |msg: String| Err(CoreError::InvalidConfig(msg));
-
-    let output_name = match declared.and_then(|o| o.name.clone()) {
-        Some(name) if outputs.iter().any(|(n, _)| *n == name) => name,
-        Some(name) => {
-            return invalid(format!(
-                "{contract_label} names output {name:?} but the model's outputs are {:?}",
-                outputs.iter().map(|(n, _)| n).collect::<Vec<_>>()
-            ))
-        }
+) -> Result<String, CoreError> {
+    match declared.and_then(|o| o.name.clone()) {
+        Some(name) if outputs.iter().any(|(n, _)| *n == name) => Ok(name),
+        Some(name) => Err(CoreError::InvalidConfig(format!(
+            "{contract_label} names output {name:?} but the model's outputs are {:?}",
+            outputs.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        ))),
         None => match DEFAULT_PROBABILITY_OUTPUTS
             .iter()
-            .find(|d| outputs.iter().any(|(n, _)| n == *d))
+            .find(|d| outputs.iter().any(|(n, _)| n == **d))
         {
-            Some(name) => name.to_string(),
-            None => {
-                return invalid(format!(
-                    "model has no probability output (looked for {DEFAULT_PROBABILITY_OUTPUTS:?}; \
-                     its outputs are {:?}). Set `output.name` in {contract_label}.",
-                    outputs.iter().map(|(n, _)| n).collect::<Vec<_>>()
-                ))
-            }
+            Some(name) => Ok(name.to_string()),
+            None => Err(CoreError::InvalidConfig(format!(
+                "model has no probability output (looked for {DEFAULT_PROBABILITY_OUTPUTS:?}; \
+                 its outputs are {:?}). Set `output.name` in {contract_label}.",
+                outputs.iter().map(|(n, _)| n).collect::<Vec<_>>()
+            ))),
         },
-    };
-    let width = outputs
-        .iter()
-        .find(|(n, _)| *n == output_name)
-        .and_then(|(_, w)| *w);
-    let classes = declared.and_then(|o| o.classes.clone());
-    let thresholds = declared.and_then(|o| o.thresholds.clone());
+    }
+}
 
-    if let (Some(w), Some(c)) = (width, &classes) {
-        if w != c.len() {
-            return invalid(format!(
-                "{contract_label} lists {} classes but output {output_name:?} has {w} columns",
-                c.len()
-            ));
+fn resolve_binary_spec(
+    contract_label: &str,
+    task: TaskType,
+    output_name: String,
+    positive_class_index: Option<usize>,
+    width: Option<usize>,
+    classes: Option<Vec<String>>,
+    thresholds: Option<Vec<f64>>,
+) -> Result<OutputSpec, CoreError> {
+    if thresholds.is_some() {
+        return Err(CoreError::InvalidConfig(format!(
+            "{contract_label} sets `output.thresholds`, which applies to multilabel models; \
+             a binary model's threshold is --flip-threshold"
+        )));
+    }
+    let positive_class_index = positive_class_index.unwrap_or(1);
+    if let Some(n) = classes.as_ref().map(Vec::len).or(width) {
+        if positive_class_index >= n {
+            return Err(CoreError::InvalidConfig(format!(
+                "--positive-class-index {positive_class_index} is out of range for a model \
+                 with {n} output columns"
+            )));
         }
     }
+    Ok(OutputSpec {
+        task,
+        output_name,
+        positive_class_index,
+        columns: vec![BINARY_OUTPUT_COLUMN.to_string()],
+        thresholds: None,
+    })
+}
 
-    if task.is_binary() {
-        if thresholds.is_some() {
-            return invalid(format!(
-                "{contract_label} sets `output.thresholds`, which applies to multilabel models; \
-                 a binary model's threshold is --flip-threshold"
-            ));
-        }
-        let positive_class_index = positive_class_index.unwrap_or(1);
-        if let Some(n) = classes.as_ref().map(Vec::len).or(width) {
-            if positive_class_index >= n {
-                return invalid(format!(
-                    "--positive-class-index {positive_class_index} is out of range for a model \
-                     with {n} output columns"
-                ));
-            }
-        }
-        return Ok(OutputSpec {
-            task,
-            output_name,
-            positive_class_index,
-            columns: vec![BINARY_OUTPUT_COLUMN.to_string()],
-            thresholds: None,
-        });
-    }
-
+fn resolve_multi_spec(
+    contract_label: &str,
+    task: TaskType,
+    output_name: String,
+    positive_class_index: Option<usize>,
+    classes: Option<Vec<String>>,
+    thresholds: Option<Vec<f64>>,
+) -> Result<OutputSpec, CoreError> {
     if positive_class_index.is_some() {
-        return invalid(format!(
+        return Err(CoreError::InvalidConfig(format!(
             "--positive-class-index selects one column of a binary model; this is a {task} \
              model and every column is scored"
-        ));
+        )));
     }
     let Some(classes) = classes.filter(|c| !c.is_empty()) else {
-        return invalid(format!(
+        return Err(CoreError::InvalidConfig(format!(
             "{contract_label} declares task_type {task} but no `output.classes`; list one \
              name per output column, in the model's order"
-        ));
+        )));
     };
     let mut unique = classes.clone();
     unique.sort();
     unique.dedup();
     if unique.len() != classes.len() {
-        return invalid(format!(
+        return Err(CoreError::InvalidConfig(format!(
             "{contract_label} `output.classes` has duplicate names: {classes:?}"
-        ));
+        )));
     }
     if task == TaskType::Multiclass && classes.len() < 2 {
-        return invalid(format!(
+        return Err(CoreError::InvalidConfig(format!(
             "{contract_label} declares a multiclass model with {} class",
             classes.len()
-        ));
+        )));
     }
     match (&thresholds, task) {
         (Some(_), TaskType::Multiclass) => {
-            return invalid(format!(
+            return Err(CoreError::InvalidConfig(format!(
                 "{contract_label} sets `output.thresholds`, but a multiclass decision is the \
                  argmax; thresholds apply to multilabel models"
-            ))
+            )));
         }
         (Some(t), _) if t.len() != classes.len() => {
-            return invalid(format!(
+            return Err(CoreError::InvalidConfig(format!(
                 "{contract_label} has {} thresholds for {} labels",
                 t.len(),
                 classes.len()
-            ))
+            )));
         }
         (Some(t), _) if t.iter().any(|v| !(0.0..=1.0).contains(v)) => {
-            return invalid(format!(
+            return Err(CoreError::InvalidConfig(format!(
                 "{contract_label} thresholds must lie in [0, 1], got {t:?}"
-            ))
+            )));
         }
         _ => {}
     }
@@ -195,6 +188,57 @@ fn resolve_output_spec(
         columns: classes,
         thresholds,
     })
+}
+
+/// `outputs` lists the graph's outputs with their static trailing dimension
+/// when the graph declares one.
+fn resolve_output_spec(
+    contract_label: &str,
+    contract: Option<&ModelContract>,
+    positive_class_index: Option<usize>,
+    outputs: &[(String, Option<usize>)],
+) -> Result<OutputSpec, CoreError> {
+    let task = contract.map(|c| c.task_type).unwrap_or_default();
+    let declared = contract.map(|c| &c.output);
+
+    let output_name = resolve_output_name(contract_label, declared, outputs)?;
+
+    let width = outputs
+        .iter()
+        .find(|(n, _)| *n == output_name)
+        .and_then(|(_, w)| *w);
+    let classes = declared.and_then(|o| o.classes.clone());
+    let thresholds = declared.and_then(|o| o.thresholds.clone());
+
+    if let (Some(w), Some(c)) = (width, &classes) {
+        if w != c.len() {
+            return Err(CoreError::InvalidConfig(format!(
+                "{contract_label} lists {} classes but output {output_name:?} has {w} columns",
+                c.len()
+            )));
+        }
+    }
+
+    if task.is_binary() {
+        resolve_binary_spec(
+            contract_label,
+            task,
+            output_name,
+            positive_class_index,
+            width,
+            classes,
+            thresholds,
+        )
+    } else {
+        resolve_multi_spec(
+            contract_label,
+            task,
+            output_name,
+            positive_class_index,
+            classes,
+            thresholds,
+        )
+    }
 }
 
 /// Resolves the contract path: an explicit `--contract` wins; otherwise
