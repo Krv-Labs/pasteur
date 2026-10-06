@@ -134,6 +134,26 @@
       ]
     ]
   },
+  "regression_linear": {
+    "outputs": [
+      "variable"
+    ],
+    "predictions": [
+      5.499722957611084,
+      7.977728366851807,
+      3.031151056289673
+    ]
+  },
+  "regression_forest": {
+    "outputs": [
+      "variable"
+    ],
+    "predictions": [
+      5.471961975097656,
+      7.156322479248047,
+      3.8161368370056152
+    ]
+  },
   "probe": [
     [
       0.0,

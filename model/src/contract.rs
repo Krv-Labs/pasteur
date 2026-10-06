@@ -25,13 +25,16 @@ pub(crate) struct ContractInput {
 
 #[derive(Debug, Default, serde::Deserialize)]
 pub(crate) struct ContractOutput {
-    /// Graph output holding the probabilities. Defaults to the first of
-    /// `output_probability`/`probabilities` the graph has.
+    /// Graph output holding the probabilities (or, for regression, the
+    /// predicted value). Defaults to the first of
+    /// `output_probability`/`probabilities` the graph has, or of
+    /// `variable`/`predictions` for regression.
     #[serde(default)]
     pub(crate) name: Option<String>,
     /// One name per output column, in the model's column order. Required for
     /// multiclass and multilabel models: it is the only record of what each
-    /// column means, and its length is checked against the graph.
+    /// column means, and its length is checked against the graph. Optional
+    /// for regression, where its one entry names the target.
     #[serde(default)]
     pub(crate) classes: Option<Vec<String>>,
     /// Multilabel only: per-label decision thresholds, in `classes` order.
@@ -50,8 +53,13 @@ pub(crate) struct ModelContract {
 }
 
 const DEFAULT_PROBABILITY_OUTPUTS: [&str; 2] = ["output_probability", "probabilities"];
+/// sklearn-onnx names a regressor's output `variable`.
+const DEFAULT_PREDICTION_OUTPUTS: [&str; 2] = ["variable", "predictions"];
 /// Column name of a binary model's single positive-class output.
 pub const BINARY_OUTPUT_COLUMN: &str = "proba";
+/// Column name of a regression model's output when `output.classes` does not
+/// name it.
+pub const REGRESSION_OUTPUT_COLUMN: &str = "prediction";
 
 /// What `predict_proba` reads and how it labels it, settled at load time so a
 /// mismatched contract fails before any patient is scored.
@@ -61,7 +69,8 @@ pub(crate) struct OutputSpec {
     pub(crate) output_name: String,
     /// Binary only.
     pub(crate) positive_class_index: usize,
-    /// Output column names: `["proba"]` for binary, `output.classes` otherwise.
+    /// Output column names: `["proba"]` for binary, `output.classes` for
+    /// multi-output, and one name for regression.
     pub(crate) columns: Vec<String>,
     pub(crate) thresholds: Option<Vec<f64>>,
 }
@@ -70,23 +79,30 @@ pub(crate) struct OutputSpec {
 /// when the graph declares one.
 fn resolve_output_name(
     contract_label: &str,
+    task: TaskType,
     declared: Option<&ContractOutput>,
     outputs: &[(String, Option<usize>)],
 ) -> Result<String, CoreError> {
+    let (kind, defaults) = match task {
+        TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => {
+            ("probability", DEFAULT_PROBABILITY_OUTPUTS)
+        }
+        TaskType::Regression => ("prediction", DEFAULT_PREDICTION_OUTPUTS),
+    };
     match declared.and_then(|o| o.name.clone()) {
         Some(name) if outputs.iter().any(|(n, _)| *n == name) => Ok(name),
         Some(name) => Err(CoreError::InvalidConfig(format!(
             "{contract_label} names output {name:?} but the model's outputs are {:?}",
             outputs.iter().map(|(n, _)| n).collect::<Vec<_>>()
         ))),
-        None => match DEFAULT_PROBABILITY_OUTPUTS
+        None => match defaults
             .iter()
             .find(|d| outputs.iter().any(|(n, _)| n == **d))
         {
             Some(name) => Ok(name.to_string()),
             None => Err(CoreError::InvalidConfig(format!(
-                "model has no probability output (looked for {DEFAULT_PROBABILITY_OUTPUTS:?}; \
-                 its outputs are {:?}). Set `output.name` in {contract_label}.",
+                "model has no {kind} output (looked for {defaults:?}; its outputs are {:?}). \
+                 Set `output.name` in {contract_label}.",
                 outputs.iter().map(|(n, _)| n).collect::<Vec<_>>()
             ))),
         },
@@ -190,6 +206,54 @@ fn resolve_multi_spec(
     })
 }
 
+fn resolve_regression_spec(
+    contract_label: &str,
+    output_name: String,
+    positive_class_index: Option<usize>,
+    width: Option<usize>,
+    classes: Option<Vec<String>>,
+    thresholds: Option<Vec<f64>>,
+) -> Result<OutputSpec, CoreError> {
+    let invalid = |msg: String| Err(CoreError::InvalidConfig(msg));
+    if positive_class_index.is_some() {
+        return invalid(
+            "--positive-class-index selects one column of a binary model; a regression \
+             model has one output, its predicted value"
+                .to_string(),
+        );
+    }
+    if thresholds.is_some() {
+        return invalid(format!(
+            "{contract_label} sets `output.thresholds`, which applies to multilabel models; \
+             a regression model's flipper cutoff is --flip-threshold, in the target's units"
+        ));
+    }
+    if let Some(w) = width.filter(|w| *w != 1) {
+        return invalid(format!(
+            "output {output_name:?} has {w} columns; Pasteur scores single-target \
+             regression models, which predict one value per row"
+        ));
+    }
+    let column = match classes.as_deref() {
+        None => REGRESSION_OUTPUT_COLUMN.to_string(),
+        Some([name]) => name.clone(),
+        Some(names) => {
+            return invalid(format!(
+                "{contract_label} lists {} `output.classes` for a regression model; give one \
+                 name for the target, or leave it out",
+                names.len()
+            ))
+        }
+    };
+    Ok(OutputSpec {
+        task: TaskType::Regression,
+        output_name,
+        positive_class_index: 0,
+        columns: vec![column],
+        thresholds: None,
+    })
+}
+
 pub(crate) fn resolve_output_spec(
     contract_label: &str,
     contract: Option<&ModelContract>,
@@ -199,7 +263,7 @@ pub(crate) fn resolve_output_spec(
     let task = contract.map(|c| c.task_type).unwrap_or_default();
     let declared = contract.map(|c| &c.output);
 
-    let output_name = resolve_output_name(contract_label, declared, outputs)?;
+    let output_name = resolve_output_name(contract_label, task, declared, outputs)?;
 
     let width = outputs
         .iter()
@@ -217,8 +281,8 @@ pub(crate) fn resolve_output_spec(
         }
     }
 
-    if task.is_binary() {
-        resolve_binary_spec(
+    match task {
+        TaskType::Binary => resolve_binary_spec(
             contract_label,
             task,
             output_name,
@@ -226,16 +290,23 @@ pub(crate) fn resolve_output_spec(
             width,
             classes,
             thresholds,
-        )
-    } else {
-        resolve_multi_spec(
+        ),
+        TaskType::Multiclass | TaskType::Multilabel => resolve_multi_spec(
             contract_label,
             task,
             output_name,
             positive_class_index,
             classes,
             thresholds,
-        )
+        ),
+        TaskType::Regression => resolve_regression_spec(
+            contract_label,
+            output_name,
+            positive_class_index,
+            width,
+            classes,
+            thresholds,
+        ),
     }
 }
 
@@ -516,6 +587,78 @@ mod tests {
             None,
         );
         assert!(err.contains("[0, 1]"), "got {err}");
+    }
+
+    fn regression_outputs(width: Option<usize>) -> Vec<(String, Option<usize>)> {
+        vec![("variable".to_string(), width)]
+    }
+
+    fn resolve_regression(
+        json: &str,
+        pci: Option<usize>,
+        width: Option<usize>,
+    ) -> Result<OutputSpec, String> {
+        resolve_output_spec(
+            "metadata.json",
+            Some(&contract(json)),
+            pci,
+            &regression_outputs(width),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn regression_defaults_to_the_variable_output() {
+        let spec = resolve_regression(r#"{"task_type": "regression"}"#, None, Some(1)).unwrap();
+        assert_eq!(spec.task, TaskType::Regression);
+        assert_eq!(spec.output_name, "variable");
+        assert_eq!(spec.columns, vec![REGRESSION_OUTPUT_COLUMN.to_string()]);
+        let named = resolve_regression(
+            r#"{"task_type": "regression", "output": {"classes": ["hba1c"]}}"#,
+            None,
+            Some(1),
+        )
+        .unwrap();
+        assert_eq!(named.columns, vec!["hba1c".to_string()]);
+    }
+
+    #[test]
+    fn regression_without_a_prediction_output_names_what_it_looked_for() {
+        let err = resolve_output_spec(
+            "metadata.json",
+            Some(&contract(r#"{"task_type": "regression"}"#)),
+            None,
+            &outputs(Some(2)),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("no prediction output") && err.contains("variable"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn regression_is_single_output_without_thresholds_or_positive_class() {
+        let json = r#"{"task_type": "regression"}"#;
+        let err = resolve_regression(json, None, Some(3)).unwrap_err();
+        assert!(err.contains("3 columns"), "{err}");
+        let err = resolve_regression(json, Some(1), Some(1)).unwrap_err();
+        assert!(err.contains("--positive-class-index"), "{err}");
+        let err = resolve_regression(
+            r#"{"task_type": "regression", "output": {"thresholds": [6.5]}}"#,
+            None,
+            Some(1),
+        )
+        .unwrap_err();
+        assert!(err.contains("--flip-threshold"), "{err}");
+        let err = resolve_regression(
+            r#"{"task_type": "regression", "output": {"classes": ["a", "b"]}}"#,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("2 `output.classes`"), "{err}");
     }
 
     #[test]
