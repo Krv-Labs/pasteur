@@ -8,7 +8,7 @@ use pasteur_hf::layout;
 use polars::prelude::*;
 
 use crate::args::SimulateArgs;
-use crate::data::{class_indices, derive_label_matrix};
+use crate::data::{class_indices, LabelSource};
 use crate::io::{read_parquet, with_ids, write_variant};
 
 pub fn run(args: SimulateArgs) -> Result<()> {
@@ -30,16 +30,7 @@ pub fn run(args: SimulateArgs) -> Result<()> {
 
     run_blackout(&args, &features, &source_row_id, &row_ordinal)?;
     run_jitter_iters(&args, &features, &source_row_id, &row_ordinal)?;
-    if let Some(labels_path) = &args.labels {
-        run_flipper(
-            &args,
-            &features,
-            labels_path,
-            source_row_id.as_materialized_series(),
-        )?;
-    } else {
-        println!("  skipped flipper/ (pass --labels to generate interpolation grid)");
-    }
+    run_flipper(&args, &features, source_row_id.as_materialized_series())?;
 
     layout::validate_sim_bundle(&args.output)
         .context("simulation output failed layout validation")?;
@@ -131,29 +122,65 @@ fn run_jitter_iters(
     Ok(())
 }
 
-fn run_flipper(
-    args: &SimulateArgs,
-    features: &DataFrame,
-    labels_path: &std::path::Path,
-    source_row_id: &Series,
-) -> Result<()> {
+/// Writes the flipper grid when the flags give it labels to pair across:
+/// cohorts for a classifier, targets plus a cutoff for regression.
+fn run_flipper(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series) -> Result<()> {
     let task = TaskType::from(args.task);
-    let labels = derive_label_matrix(labels_path, &args.positive_group_ids, task, source_row_id)?;
+    let source = LabelSource::from_args(
+        task,
+        args.labels.as_deref(),
+        &args.positive_group_ids,
+        &args.targets,
+    )?;
+    let cutoff = match (task, args.flip_threshold) {
+        (TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel, Some(_)) => {
+            anyhow::bail!(
+                "simulate reads --flip-threshold only for --task regression; a {task} grid \
+                 pairs patients across cohorts, and the threshold is set at evaluate time"
+            )
+        }
+        (TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel, None) => None,
+        (TaskType::Regression, cutoff) => cutoff,
+    };
+    let Some(source) = source else {
+        let needs = match task {
+            TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => "--labels",
+            TaskType::Regression => "--targets, --target-col and --flip-threshold",
+        };
+        println!("  skipped flipper/ (pass {needs} to generate interpolation grid)");
+        return Ok(());
+    };
+    if task == TaskType::Regression && cutoff.is_none() {
+        println!(
+            "  skipped flipper/ (pass --flip-threshold, the clinical cutoff in target units, \
+             to generate interpolation grid)"
+        );
+        return Ok(());
+    }
+    let labels = source.derive(task, source_row_id)?;
+    // Set by now for regression; classifier grids do not read it.
+    let flip_threshold = cutoff.unwrap_or(0.5);
     let config = FlipperConfig {
         n_pairs: args.flipper_pairs,
         n_steps: args.flipper_steps,
-        flip_threshold: 0.5,
+        flip_threshold,
         positive_class_label: None,
         random_state: Some(args.random_state),
     };
     let simulator = FlipperSimulator::new(config);
     // Binary pairs across the positive cohort; multiclass across two classes
     // (label_a/label_b hold class indices in --positive-group-id order);
-    // multilabel across one label per pair (recorded in `pair_label`).
+    // multilabel across one label per pair (recorded in `pair_label`);
+    // regression across the cutoff (label_a/label_b hold true targets).
     let grid = match task {
         TaskType::Binary => simulator.generate(features, labels[0].as_materialized_series())?,
         TaskType::Multiclass => simulator.generate(features, &class_indices(&labels)?)?,
         TaskType::Multilabel => simulator.generate_multilabel(features, &labels)?,
+        TaskType::Regression => simulator.generate_regression(
+            features,
+            labels[0].as_materialized_series(),
+            flip_threshold,
+        )?,
     };
     let out = with_flipper_ids(&grid)?;
     write_variant(&args.output, "flipper", "flipper", &out)

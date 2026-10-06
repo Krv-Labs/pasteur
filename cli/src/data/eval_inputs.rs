@@ -6,7 +6,7 @@ use pasteur_core::{is_flipper_meta_column, EvaluationConfig, SimulationVariant, 
 use pasteur_hf::layout;
 use polars::prelude::*;
 
-use crate::data::labels::derive_label_matrix;
+use crate::data::source::LabelSource;
 use crate::io::read_parquet;
 
 pub struct EvaluationInputs {
@@ -21,14 +21,13 @@ pub struct EvaluationInputs {
 pub fn build_evaluation_inputs(
     sim_root: &Path,
     sim_type: &str,
-    labels_path: &Path,
-    group_ids: &[u32],
+    source: &LabelSource,
     task: TaskType,
     dataset_name: &str,
     flip_threshold: f64,
 ) -> Result<EvaluationInputs> {
     let (clean_df, source_row_id, feature_order) = load_clean_baseline(sim_root)?;
-    let labels = derive_label_matrix(labels_path, group_ids, task, &source_row_id)?;
+    let labels = source.derive(task, &source_row_id)?;
     let clean = SimulationVariant {
         x: feature_columns(&clean_df)?,
         y: labels.clone(),
@@ -36,7 +35,7 @@ pub fn build_evaluation_inputs(
 
     let variant_files = list_variant_files(sim_root, sim_type)?;
     let simulation_variants =
-        load_simulation_variants(&variant_files, sim_type, dataset_name, &labels)?;
+        load_simulation_variants(&variant_files, sim_type, dataset_name, &labels, task)?;
 
     let feature_order = if sim_type == "flipper" {
         simulation_variants
@@ -54,7 +53,11 @@ pub fn build_evaluation_inputs(
     let eval_config = EvaluationConfig {
         n_jitter_iters: variant_files.len(),
         allow_partial: true,
-        metrics: vec!["roc_auc".to_string()],
+        metrics: vec![match task {
+            TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => "roc_auc",
+            TaskType::Regression => "rmse",
+        }
+        .to_string()],
         flip_threshold,
         task,
     };
@@ -124,21 +127,19 @@ fn load_simulation_variants(
     sim_type: &str,
     dataset_name: &str,
     labels: &DataFrame,
+    task: TaskType,
 ) -> Result<HashMap<String, HashMap<String, SimulationVariant>>> {
     let mut simulation_variants = HashMap::new();
     for path in variant_files {
         let name = variant_name(path, sim_type);
         let df = read_parquet(path)?;
         let (x, y) = if sim_type == "flipper" {
-            // Grid rows are synthetic patients with no label of their own.
+            // Grid rows are synthetic patients with no label of their own:
+            // 0 for classifiers, as before, and no target for regression.
             let placeholder: Vec<Column> = labels
                 .get_column_names()
                 .iter()
-                .map(|name| {
-                    Int64Chunked::from_vec((*name).clone(), vec![0i64; df.height()])
-                        .into_series()
-                        .into()
-                })
+                .map(|name| placeholder_label((*name).clone(), task, df.height()).into())
                 .collect();
             let height = df.height();
             (df, DataFrame::new(height, placeholder)?)
@@ -150,6 +151,15 @@ fn load_simulation_variants(
         simulation_variants.insert(name, per_dataset);
     }
     Ok(simulation_variants)
+}
+
+fn placeholder_label(name: PlSmallStr, task: TaskType, n: usize) -> Series {
+    match task {
+        TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => {
+            Int64Chunked::from_vec(name, vec![0i64; n]).into_series()
+        }
+        TaskType::Regression => Series::full_null(name, n, &DataType::Float64),
+    }
 }
 
 pub fn model_feature_frame(

@@ -2,8 +2,9 @@ use pasteur_core::TaskType;
 
 /// `per_model_preds[model][column][row]`. Each model's decision per row is
 /// the positive class at a fixed 0.5 for binary (so `--flip-threshold` does
-/// not move it), the argmax for multiclass, and the set of labels at or over
-/// that model's threshold for multilabel.
+/// not move it), the argmax for multiclass, the set of labels at or over
+/// that model's threshold for multilabel, and the side of the cutoff
+/// (`per_model_thresholds[model][0]`) for regression.
 pub fn build_all_agree_column(
     per_model_preds: &[Vec<Vec<f64>>],
     per_model_thresholds: &[Vec<f64>],
@@ -31,6 +32,7 @@ fn decisions(
     (0..n_rows)
         .map(|i| match task {
             TaskType::Binary => vec![preds[0][i] >= 0.5],
+            TaskType::Regression => vec![preds[0][i] >= thresholds[0]],
             TaskType::Multiclass => {
                 let best = (0..preds.len())
                     .max_by(|&a, &b| preds[a][i].total_cmp(&preds[b][i]))
@@ -63,6 +65,16 @@ mod tests {
         let b = vec![vec![0.1, 0.3], vec![0.6, 0.2], vec![0.3, 0.5]];
         let t = vec![vec![], vec![]];
         let agree = build_all_agree_column(&[a, b], &t, TaskType::Multiclass, 2);
+        assert_eq!(agree, vec![true, false]);
+    }
+
+    #[test]
+    fn regression_agreement_is_the_side_of_the_cutoff() {
+        // Row 0: 6.0 and 6.4 both under 6.5. Row 1: 6.4 vs 6.6 straddle it.
+        let a = vec![vec![6.0, 6.4]];
+        let b = vec![vec![6.4, 6.6]];
+        let t = vec![vec![6.5], vec![6.5]];
+        let agree = build_all_agree_column(&[a, b], &t, TaskType::Regression, 2);
         assert_eq!(agree, vec![true, false]);
     }
 
