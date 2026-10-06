@@ -184,6 +184,60 @@ grids store the label index in ``pair_label``. Evaluating a grid built for a
 different task is an error. Evaluating one built with the same task but
 different groups is not detected.
 
+Regression models
+-----------------
+
+A single-target regression model (``--task regression``) predicts a value in
+the target's units instead of a probability. The JSON keeps the same shape,
+with these fields:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Definition
+   * - ``baselines.rmse``, ``baselines.mae``, ``baselines.r2``
+     - Root-mean-square error, mean absolute error, and R² on the clean
+       cohort. RMSE and MAE are in the target's units; lower is better. R² is
+       1 for a perfect model, 0 for one no better than predicting the mean,
+       and negative for one worse than that.
+   * - ``metric_based.rmse.resiliency``
+     - Clean RMSE ÷ blackout RMSE. 1.0 means blackout cost nothing; 0.5 means
+       the error doubled. It can exceed 1.0 when blackout happens to help,
+       which usually means the blacked-out feature was hurting the model.
+   * - ``metric_invariant.jitter_stability``
+     - ``1 / (1 + 100 × v / var(target))``, where ``v`` is the per-patient
+       variance of the prediction across jitter variants, averaged over
+       patients. Dividing by the target's variance makes the score
+       unit-free: the same model scores the same in mmol/mol and in %.
+   * - ``metric_invariant.flipper_stability``
+     - For each pair of one patient whose true target is below the
+       ``--flip-threshold`` cutoff and one at or above it, the position ``t``
+       (0 → 1) where the *prediction* first crosses the cutoff. Pairs that
+       never cross count as 1.0.
+
+The ``regression`` section reports the same behaviour in the target's units:
+``target_sd``, ``blackout_rmse``, ``jitter_prediction_sd`` (the mean
+per-patient standard deviation of the prediction across jitter draws),
+``flip_threshold``, and ``flipper_never_flipped``. It is absent for
+classifiers.
+
+**The flipper cutoff is a clinical choice.** There is no decision boundary in
+a regression model, so flipper needs one: the threshold your service acts on,
+such as HbA1c 6.5%. Pass the same ``--flip-threshold`` to ``simulate`` and to
+``evaluate``. A grid evaluated against a cutoff that some pair does not
+straddle is rejected. Without a cutoff, ``simulate`` skips flipper.
+
+**Read ``flipper_never_flipped`` here too.** Pairs are chosen by their true
+targets, but crossings are read from predictions. A model whose predictions
+stay on one side of the cutoff for patients just above it never crosses, and
+those pairs count as 1.0.
+
+**Jitter depends on the cohort.** Because jitter is scaled by the target's
+variance in the clean cohort, compare jitter stability between models on the
+same cohort only.
+
 What these numbers do not show
 ------------------------------
 

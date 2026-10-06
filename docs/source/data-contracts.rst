@@ -36,6 +36,8 @@ The original ID is converted to a string, not integer-coerced. A separate
 Every column other than the ID is carried into the outputs and sent to the
 model, in file order. Drop outcome, label, and administrative columns before
 running Pasteur, and keep the features in the order the model was trained on.
+A regression target in particular belongs in a separate targets file (see
+below), never in the clean cohort, or the model is handed the answer.
 The input must be parquet; :doc:`model-selection` shows how to convert a CSV.
 
 Labels
@@ -79,6 +81,41 @@ it cannot check that group 12 really means the model's second class.
 :doc:`model-selection` includes a short script that builds this file from an
 outcome column.
 
+Targets (regression)
+--------------------
+
+A regression model is scored against a continuous true value for each row,
+from a separate parquet passed as ``--targets`` with ``--target-col``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 22 50
+
+   * - Column
+     - Type
+     - Meaning
+   * - ID column
+     - any
+     - Selected by ``--targets-id-col`` (default ``node_id``)
+   * - Target column
+     - numeric
+     - Selected by ``--target-col``, e.g. ``hba1c``, in the target's units
+
+IDs are matched to the clean cohort's ``--id-col`` **as text**, so IDs such as
+``A00123`` work and are not coerced to integers. Rows in the targets file that
+are not in the cohort are ignored.
+
+Every cohort row needs exactly one finite target. A row with no entry, an ID
+listed twice, or a missing or non-finite value stops the run with a count and
+example IDs. Pasteur does not drop those rows, because scoring a model on
+whichever rows happen to have a value would quietly change the cohort. A
+target with the same value on every row is also an error: it cannot tell a
+good model from a bad one.
+
+``--labels`` and ``--positive-group-id`` are for classifiers; passing
+``--labels`` with ``--task regression``, or ``--targets`` with a classifier,
+is an error.
+
 Model contract
 --------------
 
@@ -118,8 +155,8 @@ Multiclass and multilabel models must also declare what their outputs are:
    * - Field
      - Meaning
    * - ``task_type``
-     - ``binary`` (default), ``multiclass``, or ``multilabel``. Must match
-       ``--task``.
+     - ``binary`` (default), ``multiclass``, ``multilabel``, or
+       ``regression``. Must match ``--task``.
    * - ``output.name``
      - Graph output holding the probabilities. Defaults to
        ``output_probability``, then ``probabilities``.
@@ -130,6 +167,24 @@ Multiclass and multilabel models must also declare what their outputs are:
    * - ``output.thresholds``
      - Multilabel only, optional: one decision threshold per label. Defaults
        to ``--flip-threshold`` for every label.
+
+A single-target regression model declares ``task_type`` and, optionally, a
+name for its one output column:
+
+.. code-block:: json
+
+   {
+     "task_type": "regression",
+     "input": {"feature_order": ["glucose", "bmi", "age"]},
+     "output": {"classes": ["hba1c"]}
+   }
+
+For regression, ``output.name`` defaults to ``variable`` (what scikit-learn
+regressors export), then ``predictions``. ``output.classes`` is optional and,
+if given, holds exactly one name; the prediction column is otherwise called
+``prediction``. The output must be a float tensor of shape ``[n]`` or
+``[n, 1]``. ``output.thresholds`` and ``--positive-class-index`` are rejected:
+a regression model's cutoff is ``--flip-threshold``, in the target's units.
 
 Pasteur reads every probability format scikit-learn models export to ONNX: a
 ``[n, K]`` tensor, a ZipMap with integer or string keys, and, for multilabel,

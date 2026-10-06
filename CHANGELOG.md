@@ -22,14 +22,28 @@
 - Multiclass flipper finds where the pairwise margin `p[b] − p[a]` crosses 0;
   multilabel flipper samples pairs per label (new `pair_label` grid column)
   and crosses each label's own threshold.
+- **Single-target regression models.** `task_type: "regression"` in
+  `metadata.json` (default output `variable`, then `predictions`), and
+  `--task regression` with true values from `--targets <parquet>
+  --target-col <name>`, joined by ID as text. `baselines` are `rmse`, `mae`
+  and `r2`; resiliency is clean RMSE ÷ blackout RMSE under
+  `metric_based.rmse`; jitter variance is scaled by the target's variance.
+  Flipper pairs patients across a clinical cutoff (`--flip-threshold`, in
+  target units, passed to both `simulate` and `evaluate`) and finds where the
+  prediction crosses it. A new `regression` section reports these in target
+  units; classifier JSON is unchanged.
 
 ### Changed
 
 - **Breaking (library):** `Model::predict_proba` returns a `DataFrame` with
   one column per output, `SimulationVariant.y` is a `DataFrame` label matrix,
   `EvaluationConfig` gains `task`, and `OnnxModel::from_file` takes
-  `positive_class_index: Option<usize>`. CLI usage for binary models is
-  unchanged.
+  `positive_class_index: Option<usize>`. `TaskType` gains `Regression` and
+  `EvaluationResult` gains an optional `regression` field. CLI usage for
+  binary models is unchanged.
+- `evaluate`/`compare` `--labels` is no longer required at parse time; it is
+  required for classifiers and refused for regression. `--flip-threshold`
+  still defaults to 0.5 for classifiers.
 - **ROC AUC handles tied scores.** Ties count half (Mann–Whitney) instead of
   depending on row order. Results without ties agree with the previous
   implementation to floating-point rounding.

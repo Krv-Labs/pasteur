@@ -48,7 +48,9 @@ pasteur-cli simulate \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--input` | *(required)* | Local clean parquet |
-| `--labels` | — | Group-membership parquet ([schema](../docs/source/data-contracts.rst)) for flipper pair sampling (omit to skip flipper) |
+| `--labels` | — | Group-membership parquet ([schema](../docs/source/data-contracts.rst)) for flipper pair sampling (omit to skip flipper). Classifiers only |
+| `--targets`, `--target-col` | — | Regression: targets parquet and its target column ([schema](../docs/source/data-contracts.rst)) |
+| `--targets-id-col` | `node_id` | Regression: ID column of `--targets`, matched as text |
 | `--output` | `output` | Root for sim-type folders |
 | `--dataset-name` | — | Provenance label for logs |
 | `--id-col` | `node_id` | Row id column (becomes `source_row_id`) |
@@ -58,7 +60,8 @@ pasteur-cli simulate \
 | `--jitter-scale` | `1.0` | Jitter noise scale |
 | `--jitter-iters` | `3` | Number of `jitter_<i>` variants |
 | `--positive-group-id` | `103` | `group_id` for positive cohort (flipper). Repeat once per class/label for `--task multiclass`/`multilabel` |
-| `--task` | `binary` | `binary`, `multiclass`, or `multilabel`: how flipper pairs are sampled |
+| `--task` | `binary` | `binary`, `multiclass`, `multilabel`, or `regression`: how flipper pairs are sampled |
+| `--flip-threshold` | — | Regression only: clinical cutoff (target units) that flipper pairs straddle; omit to skip flipper |
 | `--flipper-pairs` | `200` | Cross-label pairs to sample |
 | `--flipper-steps` | `20` | Interpolation steps per pair |
 | `--random-state` | `42` | RNG seed |
@@ -114,7 +117,9 @@ pasteur-cli evaluate blackout \
 |------|---------|-------------|
 | `sim_type` | *(positional)* | e.g. `blackout`, `jitter`, `flipper` |
 | `--sim-root` | *(required)* | Local bundle with `clean/` and `<sim_type>/` |
-| `--labels` | *(required)* | Local `groups.parquet` for label derivation |
+| `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation |
+| `--targets`, `--target-col` | *(regression)* | Local targets parquet and its target column |
+| `--targets-id-col` | `node_id` | ID column of `--targets`, matched as text |
 | `--model` | *(required)* | Local `.onnx` path |
 | `--contract` | — | Explicit `metadata.json` path (default: next to `--model`) |
 | `--input-name` | `input` | ONNX input tensor name |
@@ -123,7 +128,7 @@ pasteur-cli evaluate blackout \
 | `--positive-group-id` | `103` | `group_id` for positive cohort; repeat once per model output (in `output.classes` order) for multiclass/multilabel |
 | `--task` | `binary` | Must match the model's `metadata.json` `task_type` |
 | `--dataset-name` | `simulation` | Internal dataset key in JSON |
-| `--flip-threshold` | `0.5` | Decision threshold for flipper stability (multilabel: labels without a contract threshold; unused for multiclass) |
+| `--flip-threshold` | `0.5` | Decision threshold for flipper stability (multilabel: labels without a contract threshold; unused for multiclass). Regression: clinical cutoff in target units, no default, required for `flipper` |
 | `-o, --output` | stdout | Write `EvaluationResult` JSON to file |
 
 ---
@@ -148,7 +153,7 @@ Same flags as `evaluate`, except:
 - `--predictions-out` writes a local per-patient predictions parquet
 - A single `--contract` applies to every model
 
-**Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree` (all models on the same side of 0.5).
+**Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree` (all models on the same side of 0.5). Regression writes `target` instead of `label`, and `all_agree` compares sides of `--flip-threshold` (null without one).
 
 The `--output` directory must already exist.
 
@@ -181,7 +186,7 @@ pasteur-cli cache clear --kind simulations
 
 Defined in [`core/src/schema.rs`](../core/src/schema.rs):
 
-- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`
+- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel) or `regression` sections
 - **`ComparisonResult`**: `evaluations: [{ model_label, evaluation }]`
 
 ---
