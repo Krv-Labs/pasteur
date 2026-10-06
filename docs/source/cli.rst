@@ -26,7 +26,13 @@ Important options:
      - Local clean parquet
    * - ``--labels``
      - none
-     - Cohort-membership parquet; enables flipper
+     - Cohort-membership parquet; enables flipper (classifiers)
+   * - ``--targets``, ``--target-col``
+     - none
+     - Regression: targets parquet and its target column
+   * - ``--targets-id-col``
+     - ``node_id``
+     - Regression: ID column of ``--targets``, matched as text
    * - ``--output``
      - ``output``
      - Simulation bundle root
@@ -54,8 +60,12 @@ Important options:
        for ``--task multiclass`` / ``multilabel``
    * - ``--task``
      - ``binary``
-     - ``binary``, ``multiclass``, or ``multilabel``: how flipper pairs are
-       sampled
+     - ``binary``, ``multiclass``, ``multilabel``, or ``regression``: how
+       flipper pairs are sampled
+   * - ``--flip-threshold``
+     - none
+     - Regression only: clinical cutoff, in target units, that flipper pairs
+       are sampled across. Without it, regression skips flipper
    * - ``--flipper-pairs``
      - ``200``
      - Opposite-label patient pairs to sample for flipper
@@ -114,8 +124,14 @@ from each.
      - required
      - Bundle written by ``simulate``
    * - ``--labels``
-     - required
+     - classifiers
      - Cohort-membership parquet (see :doc:`data-contracts`)
+   * - ``--targets``, ``--target-col``
+     - regression
+     - Targets parquet and its target column (see :doc:`data-contracts`)
+   * - ``--targets-id-col``
+     - ``node_id``
+     - ID column of ``--targets``, matched as text
    * - ``--model``
      - required
      - Local ``.onnx`` file
@@ -138,11 +154,13 @@ from each.
    * - ``--positive-class-index``
      - ``1``
      - Binary only: column of the probability output that is the positive
-       class. Rejected for multiclass and multilabel models
+       class. Rejected for multiclass, multilabel and regression models
    * - ``--flip-threshold``
      - ``0.5``
      - Decision threshold used by flipper stability. Multilabel: applies to
-       labels without a contract threshold. Unused for multiclass (argmax)
+       labels without a contract threshold. Unused for multiclass (argmax).
+       Regression: the clinical cutoff in target units, with no default;
+       required for ``evaluate flipper`` and must match ``simulate``'s
    * - ``-o``, ``--output``
      - stdout
      - Write the JSON result to a file. The directory must already exist.
@@ -183,6 +201,23 @@ For a multiclass or multilabel model, pass the task and one group per output:
 
 The model's ``metadata.json`` must declare ``task_type`` and
 ``output.classes``; see :doc:`data-contracts`.
+
+For a regression model, pass the targets instead of cohorts, and the clinical
+cutoff for flipper to both commands:
+
+.. code-block:: bash
+
+   pasteur-cli simulate --input ./clean.parquet --output ./sim \
+     --task regression --targets ./targets.parquet --target-col hba1c \
+     --flip-threshold 6.5
+
+   pasteur-cli evaluate flipper --sim-root ./sim \
+     --task regression --targets ./targets.parquet --target-col hba1c \
+     --flip-threshold 6.5 --model ./models/model.onnx
+
+``--predictions-out`` then writes ``target`` and one prediction column per
+model. ``all_agree`` is true when every model puts the patient on the same
+side of the cutoff, and null when no ``--flip-threshold`` is given.
 
 cache
 -----
