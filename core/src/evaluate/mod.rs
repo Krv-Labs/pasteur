@@ -1,6 +1,7 @@
 pub mod flipper;
 mod metrics;
 mod multi;
+mod regression;
 
 pub use flipper::{
     calculate_flipper_stability, find_flip_points, flipper_model_features, score_flipper,
@@ -14,7 +15,7 @@ pub use metrics::{
 use crate::error::CoreError;
 use crate::schema::{
     EvaluationConfig, EvaluationResult, EvaluationScores, MetricBasedScores, MetricInvariantScores,
-    MultiOutputScores, SimulationVariant,
+    MultiOutputScores, RegressionScores, SimulationVariant, TaskType,
 };
 use chrono::Utc;
 use metrics::{jitter_stability_from_variance, series_to_f64};
@@ -51,7 +52,7 @@ pub(crate) fn predict_matrix(
 }
 
 /// `predict_matrix`, plus the model's output column names.
-fn predict_named(
+pub(crate) fn predict_named(
     model: &dyn Model,
     x: &DataFrame,
     n_outputs: usize,
@@ -124,29 +125,36 @@ impl Evaluator {
         }
 
         // Each headline number is the mean over datasets where it is defined.
-        let mean = |f: fn(&SingleDatasetScores) -> Option<f64>| {
+        let mean = |f: &dyn Fn(&SingleDatasetScores) -> Option<f64>| {
             mean_some(per_dataset_scores.iter().map(f))
         };
-        let jitter_stability = mean(|s| Some(s.jitter_stability)).unwrap_or(1.0);
-        let flipper_stability = mean(|s| s.flipper_stability);
-        let resiliency = mean(|s| Some(s.resiliency)).unwrap_or(1.0);
-        let baseline = mean(|s| Some(s.baseline)).unwrap_or(0.0);
-        let multi = average_multi(
-            per_dataset_scores
-                .into_iter()
-                .filter_map(|s| s.multi)
-                .collect(),
-        );
+        let jitter_stability = mean(&|s| Some(s.jitter_stability)).unwrap_or(1.0);
+        let flipper_stability = mean(&|s| s.flipper_stability);
+        let resiliency = mean(&|s| Some(s.resiliency)).unwrap_or(1.0);
+        let (metric, keys) = baseline_keys(config.task);
+        let baselines = keys
+            .iter()
+            .enumerate()
+            .map(|(j, key)| {
+                let value = mean(&|s| s.baselines.get(j).copied()).unwrap_or(0.0);
+                (key.to_string(), value)
+            })
+            .collect();
+        let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
+            .into_iter()
+            .map(|s| (s.multi, s.regression))
+            .unzip();
+        let multi = average_multi(multi.into_iter().flatten().collect());
+        let regression = regression::average_regression(regression.into_iter().flatten().collect());
 
-        // Only ROC AUC is computed so far; generalizability is a placeholder.
+        // Generalizability is a placeholder.
         let metric_based = HashMap::from([(
-            "roc_auc".to_string(),
+            metric.to_string(),
             MetricBasedScores {
                 resiliency,
                 generalizability: 1.0,
             },
         )]);
-        let baselines = HashMap::from([("roc_auc".to_string(), baseline)]);
 
         Ok(EvaluationResult {
             baselines,
@@ -159,10 +167,41 @@ impl Evaluator {
             },
             created_at: Utc::now(),
             multi,
+            regression,
         })
     }
 
     fn run_single_dataset(
+        &self,
+        model: &dyn Model,
+        clean_dataset: &SimulationVariant,
+        simulated_variants: &HashMap<String, SimulationVariant>,
+        config: &EvaluationConfig,
+    ) -> Result<SingleDatasetScores, CoreError> {
+        match config.task {
+            TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => {
+                self.score_classifier(model, clean_dataset, simulated_variants, config)
+            }
+            TaskType::Regression => {
+                let scored = regression::score_dataset(
+                    model,
+                    clean_dataset,
+                    simulated_variants,
+                    config.flip_threshold,
+                )?;
+                Ok(SingleDatasetScores {
+                    baselines: scored.baselines.to_vec(),
+                    resiliency: scored.resiliency.unwrap_or(1.0),
+                    jitter_stability: jitter_stability_from_variance(scored.jitter_variance),
+                    flipper_stability: scored.flipper.map(|f| f.stability),
+                    multi: None,
+                    regression: Some(scored.detail),
+                })
+            }
+        }
+    }
+
+    fn score_classifier(
         &self,
         model: &dyn Model,
         clean_dataset: &SimulationVariant,
@@ -215,7 +254,7 @@ impl Evaluator {
         });
 
         Ok(SingleDatasetScores {
-            baseline,
+            baselines: vec![baseline],
             resiliency: mean_some(resiliency.iter().copied()).unwrap_or(1.0),
             jitter_stability: jitter_stability_from_variance(headline_jitter_variance(
                 task,
@@ -223,14 +262,26 @@ impl Evaluator {
             )),
             flipper_stability: flipper.map(|f| f.stability),
             multi,
+            regression: None,
         })
     }
 }
 
+/// The metric that `metric_based` is keyed by, and the `baselines` keys, in
+/// the order `SingleDatasetScores::baselines` holds them.
+fn baseline_keys(task: TaskType) -> (&'static str, &'static [&'static str]) {
+    match task {
+        TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => ("roc_auc", &["roc_auc"]),
+        TaskType::Regression => ("rmse", &regression::BASELINE_KEYS),
+    }
+}
+
 struct SingleDatasetScores {
-    baseline: f64,
+    /// One value per `baseline_keys(task)` entry.
+    baselines: Vec<f64>,
     resiliency: f64,
     jitter_stability: f64,
     flipper_stability: Option<f64>,
     multi: Option<MultiOutputScores>,
+    regression: Option<RegressionScores>,
 }

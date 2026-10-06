@@ -33,6 +33,9 @@ pub(crate) fn label_matrix(y: &DataFrame, task: TaskType) -> Result<Columns, Cor
             return invalid("multiclass evaluation needs at least two classes".to_string())
         }
         (TaskType::Multiclass | TaskType::Multilabel, _) => {}
+        (TaskType::Regression, _) => {
+            return invalid("regression targets are scored by `regression::target_vector`".into())
+        }
     }
     for i in 0..y.height() {
         let row: Vec<f64> = cols.iter().map(|c| c[i]).collect();
@@ -66,7 +69,8 @@ pub(crate) fn decision_thresholds(
             t.len()
         ))),
         (TaskType::Multilabel, Some(t)) => Ok(t),
-        (TaskType::Multilabel, None) | (TaskType::Binary | TaskType::Multiclass, _) => {
+        (TaskType::Multilabel, None)
+        | (TaskType::Binary | TaskType::Multiclass | TaskType::Regression, _) => {
             Ok(vec![flip_threshold; k])
         }
     }
@@ -98,6 +102,8 @@ pub(crate) fn label_resiliency(
                 _ => None,
             })
             .collect(),
+        // Regression resiliency is an RMSE ratio, computed in `regression`.
+        TaskType::Regression => vec![None; clean.len()],
     }
 }
 
@@ -141,7 +147,7 @@ pub(crate) fn jitter_variances(draws: &[Columns], k: usize) -> Result<Vec<Option
 /// output predates this field.
 fn decision_flip_rate(draws: &[Columns], task: TaskType, thresholds: &[f64]) -> Option<f64> {
     let decide = match task {
-        TaskType::Binary => return None,
+        TaskType::Binary | TaskType::Regression => return None,
         TaskType::Multiclass => argmax_decision,
         TaskType::Multilabel => threshold_decision,
     };
