@@ -575,3 +575,322 @@ fn binary_takes_exactly_one_group() {
     assert!(err.contains("--task multiclass"), "got: {err}");
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Targets for `write_two_feature_input`'s rows, close to the fixtures'
+/// `5.5 + f1 − 0.5 f2` so the models are scored on something they fit.
+fn write_regression_targets(path: &Path, skip_id: Option<&str>) {
+    let (ids, values): (Vec<String>, Vec<f64>) = (0..12)
+        .map(|i| {
+            let f1 = -1.5 + 0.27 * i as f64;
+            let f2 = ((i * 7) % 12) as f64 / 6.0 - 1.0;
+            (
+                (i + 1).to_string(),
+                5.5 + f1 - 0.5 * f2 + 0.05 * (i % 3) as f64,
+            )
+        })
+        .filter(|(id, _)| Some(id.as_str()) != skip_id)
+        .unzip();
+    let mut df = df!["node_id" => ids, "hba1c" => values].unwrap();
+    let mut file = fs::File::create(path).unwrap();
+    ParquetWriter::new(&mut file).finish(&mut df).unwrap();
+}
+
+/// Simulates the two-feature cohort for regression, with a flipper grid
+/// across `cutoff` when one is given.
+fn simulate_regression(root: &Path, cutoff: Option<&str>) -> (PathBuf, PathBuf) {
+    let input = root.join("clean.parquet");
+    let targets = root.join("targets.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_regression_targets(&targets, None);
+    let mut args = vec![
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        sim_root.to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--task",
+        "regression",
+        "--targets",
+        targets.to_str().unwrap(),
+        "--target-col",
+        "hba1c",
+        "--jitter-iters",
+        "2",
+        "--flipper-pairs",
+        "6",
+        "--flipper-steps",
+        "5",
+    ];
+    if let Some(cutoff) = cutoff {
+        args.extend(["--flip-threshold", cutoff]);
+    }
+    let out = run_cli(&args);
+    assert!(
+        out.status.success(),
+        "simulate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (sim_root, targets)
+}
+
+fn regression_args<'a>(
+    command: &'a str,
+    sim_type: &'a str,
+    sim_root: &'a Path,
+    targets: &'a Path,
+) -> Vec<&'a str> {
+    vec![
+        command,
+        sim_type,
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--targets",
+        targets.to_str().unwrap(),
+        "--target-col",
+        "hba1c",
+        "--task",
+        "regression",
+    ]
+}
+
+#[test]
+fn regression_simulate_evaluate_and_compare() {
+    let root = temp_dir("regression");
+    let (sim_root, targets) = simulate_regression(&root, Some("5.5"));
+    let flipper =
+        ParquetReader::new(fs::File::open(sim_root.join("flipper/flipper.parquet")).unwrap())
+            .finish()
+            .unwrap();
+    let label_a = flipper.column("label_a").unwrap().f64().unwrap();
+    let label_b = flipper.column("label_b").unwrap().f64().unwrap();
+    assert!((0..flipper.height())
+        .all(|i| label_a.get(i).unwrap() < 5.5 && label_b.get(i).unwrap() >= 5.5));
+
+    let linear = fixture_model(
+        &root.join("linear"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+    let forest = fixture_model(
+        &root.join("forest"),
+        "regression_forest",
+        "regression",
+        &["hba1c"],
+    );
+
+    for sim_type in ["blackout", "jitter", "flipper"] {
+        let mut args = regression_args("evaluate", sim_type, &sim_root, &targets);
+        args.extend([
+            "--model",
+            linear.to_str().unwrap(),
+            "--flip-threshold",
+            "5.5",
+        ]);
+        let out = run_cli(&args);
+        assert!(
+            out.status.success(),
+            "evaluate {sim_type} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(
+            result["baselines"]["rmse"].as_f64().unwrap() < 0.2,
+            "{result}"
+        );
+        assert!(
+            result["baselines"]["r2"].as_f64().unwrap() > 0.9,
+            "{result}"
+        );
+        assert!(result["evaluations"]["metric_based"]["rmse"]["resiliency"].is_number());
+        assert!(result.get("multi").is_none());
+        let detail = &result["regression"];
+        assert_eq!(detail["target"], "hba1c");
+        assert_eq!(detail["n_rows"], 12);
+        match sim_type {
+            "blackout" => assert!(detail["blackout_rmse"].is_number()),
+            "jitter" => assert!(detail["jitter_prediction_sd"].is_number()),
+            _ => {
+                assert_eq!(detail["flip_threshold"], 5.5);
+                assert!(result["evaluations"]["metric_invariant"]["flipper_stability"].is_number());
+            }
+        }
+    }
+
+    let predictions = root.join("predictions.parquet");
+    let comparison = root.join("compare.json");
+    let mut args = regression_args("compare", "jitter", &sim_root, &targets);
+    args.extend([
+        "--model",
+        linear.to_str().unwrap(),
+        "--model",
+        forest.to_str().unwrap(),
+        "--flip-threshold",
+        "5.5",
+        "--predictions-out",
+        predictions.to_str().unwrap(),
+        "--output",
+        comparison.to_str().unwrap(),
+    ]);
+    let out = run_cli(&args);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let result: serde_json::Value =
+        serde_json::from_slice(&fs::read(&comparison).unwrap()).unwrap();
+    let df = ParquetReader::new(fs::File::open(&predictions).unwrap())
+        .finish()
+        .unwrap();
+    assert_eq!(
+        df.get_column_names(),
+        [
+            "source_row_id",
+            "variant_name",
+            "target",
+            "regression_linear",
+            "regression_forest",
+            "all_agree"
+        ]
+    );
+    // The JSON's clean RMSE is the RMSE of the clean rows in the parquet.
+    let clean = df
+        .clone()
+        .lazy()
+        .filter(col("variant_name").eq(lit("clean")))
+        .collect()
+        .unwrap();
+    let target = clean.column("target").unwrap().f64().unwrap();
+    let pred = clean.column("regression_linear").unwrap().f64().unwrap();
+    let mse: f64 = (0..clean.height())
+        .map(|i| (pred.get(i).unwrap() - target.get(i).unwrap()).powi(2))
+        .sum::<f64>()
+        / clean.height() as f64;
+    let reported = result["evaluations"][0]["evaluation"]["baselines"]["rmse"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        (mse.sqrt() - reported).abs() < 1e-9,
+        "{} vs {reported}",
+        mse.sqrt()
+    );
+    assert_eq!(df.column("all_agree").unwrap().null_count(), 0);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn regression_flipper_needs_the_cutoff_it_was_simulated_with() {
+    let root = temp_dir("regression-cutoff");
+    let (sim_root, targets) = simulate_regression(&root, Some("5.5"));
+    let model = fixture_model(
+        &root.join("m"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+
+    let mut args = regression_args("evaluate", "flipper", &sim_root, &targets);
+    args.extend(["--model", model.to_str().unwrap()]);
+    let out = run_cli(&args);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("needs --flip-threshold"), "got: {err}");
+
+    args.extend(["--flip-threshold", "9"]);
+    let out = run_cli(&args);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("another cutoff or task"), "got: {err}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn regression_without_a_cutoff_skips_flipper() {
+    let root = temp_dir("regression-no-cutoff");
+    let (sim_root, _) = simulate_regression(&root, None);
+    assert!(sim_root.join("jitter").is_dir());
+    assert!(!sim_root.join("flipper").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn regression_rejects_cohort_labels_and_classifier_models() {
+    let root = temp_dir("regression-flags");
+    let (sim_root, targets) = simulate_regression(&root, None);
+    let labels = root.join("groups.parquet");
+    write_groups(&labels, &[(103, &[1, 2])]);
+    let model = fixture_model(
+        &root.join("m"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+
+    let mut args = regression_args("evaluate", "jitter", &sim_root, &targets);
+    args.extend([
+        "--model",
+        model.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+    ]);
+    let err = String::from_utf8_lossy(&run_cli(&args).stderr).to_string();
+    assert!(
+        err.contains("--labels holds cohorts for classifiers"),
+        "got: {err}"
+    );
+
+    // A binary model scored as regression is refused at load.
+    let binary = fixture_model(&root.join("b"), "binary_zipmap", "binary", &["0", "1"]);
+    let mut args = regression_args("evaluate", "jitter", &sim_root, &targets);
+    args.extend(["--model", binary.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&run_cli(&args).stderr).to_string();
+    assert!(err.contains("is a binary model"), "got: {err}");
+
+    // And --targets is refused for a classifier.
+    let out = run_cli(&[
+        "evaluate",
+        "jitter",
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--targets",
+        targets.to_str().unwrap(),
+        "--model",
+        binary.to_str().unwrap(),
+    ]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--targets and --target-col are for --task regression"),
+        "got: {err}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn regression_targets_must_cover_the_cohort() {
+    let root = temp_dir("regression-missing");
+    let (sim_root, _) = simulate_regression(&root, None);
+    let partial = root.join("partial.parquet");
+    write_regression_targets(&partial, Some("7"));
+    let model = fixture_model(
+        &root.join("m"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+    let mut args = regression_args("evaluate", "jitter", &sim_root, &partial);
+    args.extend(["--model", model.to_str().unwrap()]);
+    let out = run_cli(&args);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("1 row(s) have no row in --targets (e.g. 7)"),
+        "got: {err}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}

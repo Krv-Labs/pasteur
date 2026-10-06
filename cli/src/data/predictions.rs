@@ -12,11 +12,13 @@ pub fn build_predictions_table(
 ) -> Result<DataFrame> {
     let dataset_key = &inputs.dataset_name;
     let mut rows = PredictionRows::new(models, inputs.eval_config.task);
+    // NaN when a regression run was given no cutoff.
+    let cutoff = Some(inputs.eval_config.flip_threshold).filter(|t| t.is_finite());
     rows.append_variant("clean", &inputs.clean_datasets[dataset_key], inputs, models)?;
     for (name, per_dataset) in &inputs.simulation_variants {
         rows.append_variant(name, &per_dataset[dataset_key], inputs, models)?;
     }
-    Ok(assemble_dataframe(rows, models))
+    Ok(assemble_dataframe(rows, models, cutoff))
 }
 
 struct PredictionRows {
@@ -25,8 +27,9 @@ struct PredictionRows {
     classes: Vec<String>,
     source_row_id: Vec<String>,
     variant_name: Vec<String>,
-    /// `labels[column][row]`.
-    labels: Vec<Vec<i64>>,
+    /// `labels[column][row]`: 0/1 for classifiers, the true target for
+    /// regression (`None` on synthetic flipper rows).
+    labels: Vec<Vec<Option<f64>>>,
     /// `per_model_preds[model][column][row]`.
     per_model_preds: Vec<Vec<Vec<f64>>>,
 }
@@ -72,9 +75,9 @@ impl PredictionRows {
             self.variant_name.push(name.to_string());
         }
         for (out, col) in self.labels.iter_mut().zip(variant.y.columns()) {
-            let col = col.cast(&DataType::Int64)?;
-            let col = col.i64()?;
-            out.extend((0..n).map(|i| col.get(i).unwrap_or(0)));
+            let col = col.cast(&DataType::Float64)?;
+            let col = col.f64()?;
+            out.extend((0..n).map(|i| col.get(i)));
         }
         for (preds, (_, model)) in self.per_model_preds.iter_mut().zip(models) {
             let frame = model.predict_proba(&x)?;
@@ -93,11 +96,19 @@ impl PredictionRows {
 
 /// Binary keeps its original columns (`label`, one column per model).
 /// Multi-output models get `label__<class>` and `<model>__<class>` per class.
-fn assemble_dataframe(rows: PredictionRows, models: &[(String, OnnxModel)]) -> DataFrame {
+/// Regression gets `target` and one prediction column per model.
+fn assemble_dataframe(
+    rows: PredictionRows,
+    models: &[(String, OnnxModel)],
+    cutoff: Option<f64>,
+) -> DataFrame {
     let n_rows = rows.source_row_id.len();
-    let binary = rows.task.is_binary();
+    let single_column = match rows.task {
+        TaskType::Binary | TaskType::Regression => true,
+        TaskType::Multiclass | TaskType::Multilabel => false,
+    };
     let suffix = |prefix: &str, class: &str| {
-        if binary {
+        if single_column {
             prefix.to_string()
         } else {
             format!("{prefix}__{class}")
@@ -108,16 +119,25 @@ fn assemble_dataframe(rows: PredictionRows, models: &[(String, OnnxModel)]) -> D
         Series::new("variant_name".into(), rows.variant_name).into(),
     ];
     for (class, labels) in rows.classes.iter().zip(rows.labels) {
-        columns.push(Series::new(suffix("label", class).as_str().into(), labels).into());
+        columns.push(label_column(rows.task, &suffix("label", class), labels).into());
     }
     let thresholds: Vec<Vec<f64>> = models
         .iter()
-        .map(|(_, m)| {
-            m.decision_thresholds()
-                .unwrap_or_else(|| vec![0.5; rows.classes.len()])
+        .map(|(_, m)| match rows.task {
+            TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => m
+                .decision_thresholds()
+                .unwrap_or_else(|| vec![0.5; rows.classes.len()]),
+            TaskType::Regression => cutoff.into_iter().collect(),
         })
         .collect();
-    let all_agree = build_all_agree_column(&rows.per_model_preds, &thresholds, rows.task, n_rows);
+    let all_agree = match (rows.task, cutoff) {
+        // Without a cutoff, regression predictions have no decision to agree on.
+        (TaskType::Regression, None) => vec![None; n_rows],
+        _ => build_all_agree_column(&rows.per_model_preds, &thresholds, rows.task, n_rows)
+            .into_iter()
+            .map(Some)
+            .collect(),
+    };
     for ((model_label, _), preds) in models.iter().zip(rows.per_model_preds) {
         for (class, col) in rows.classes.iter().zip(preds) {
             columns.push(Series::new(suffix(model_label, class).as_str().into(), col).into());
@@ -125,4 +145,19 @@ fn assemble_dataframe(rows: PredictionRows, models: &[(String, OnnxModel)]) -> D
     }
     columns.push(Series::new("all_agree".into(), all_agree).into());
     DataFrame::new(n_rows, columns).expect("prediction columns aligned")
+}
+
+/// Classifier labels stay `i64` 0/1, as before; regression writes the true
+/// target as `target`.
+fn label_column(task: TaskType, name: &str, labels: Vec<Option<f64>>) -> Series {
+    match task {
+        TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => {
+            let labels: Vec<i64> = labels
+                .into_iter()
+                .map(|v| v.unwrap_or(0.0) as i64)
+                .collect();
+            Series::new(name.into(), labels)
+        }
+        TaskType::Regression => Series::new("target".into(), labels),
+    }
 }

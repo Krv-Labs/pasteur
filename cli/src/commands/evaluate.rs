@@ -2,19 +2,27 @@ use anyhow::Result;
 use pasteur_core::Evaluator;
 
 use crate::args::EvaluateArgs;
-use crate::data::{build_evaluation_inputs, flipper_feature_order_from_inputs};
+use crate::data::{
+    build_evaluation_inputs, flipper_feature_order_from_inputs, resolve_flip_threshold, LabelSource,
+};
 use crate::io::print_or_write;
 use crate::model::load_model;
 
 pub fn run(args: EvaluateArgs) -> Result<()> {
+    let task = args.task.into();
+    let source = LabelSource::required(
+        task,
+        args.labels.as_deref(),
+        &args.positive_group_ids,
+        &args.targets,
+    )?;
     let inputs = build_evaluation_inputs(
         &args.sim_root,
         &args.sim_type,
-        &args.labels,
-        &args.positive_group_ids,
-        args.task.into(),
+        &source,
+        task,
         &args.dataset_name,
-        args.flip_threshold,
+        resolve_flip_threshold(task, &args.sim_type, args.flip_threshold)?,
     )?;
 
     let feature_order = flipper_feature_order_from_inputs(&inputs, &args.sim_type);
@@ -25,7 +33,7 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         args.positive_class_index,
         args.null_fill,
         args.contract.as_deref(),
-        args.task.into(),
+        task,
     )?;
 
     let evaluator = Evaluator::new();

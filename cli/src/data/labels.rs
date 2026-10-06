@@ -28,7 +28,7 @@ pub fn derive_label_matrix(
             let row_idx = find_positive_group_row(ids, gid, labels_path)?;
             let member_ids = load_member_ids(&groups, row_idx)?;
             let name = match task {
-                TaskType::Binary => "label".to_string(),
+                TaskType::Binary | TaskType::Regression => "label".to_string(),
                 TaskType::Multiclass | TaskType::Multilabel => format!("group_{gid}"),
             };
             Ok(labels_for_rows(source_row_ids, &member_ids)
@@ -57,6 +57,9 @@ fn check_group_ids(task: TaskType, group_ids: &[u32]) -> Result<()> {
             "multiclass needs one --positive-group-id per class (at least two), got {n}"
         ),
         (TaskType::Multiclass, _) => Ok(()),
+        (TaskType::Regression, _) => {
+            anyhow::bail!("regression is scored against --targets, not --positive-group-id cohorts")
+        }
     }
 }
 
