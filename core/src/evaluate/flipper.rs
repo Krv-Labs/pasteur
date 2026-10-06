@@ -162,10 +162,13 @@ pub struct FlipperScores {
 /// - multiclass: the pairwise margin `p[class_b] − p[class_a]`, since the
 ///   decision is an argmax and no single threshold applies;
 /// - multilabel: `p[k] − threshold[k]` for the label `k` the pair was sampled
-///   for, read from the grid's `pair_label` column.
+///   for, read from the grid's `pair_label` column;
+/// - regression: `prediction − cutoff`, where the cutoff is `thresholds[0]`
+///   in the target's units. Every pair must have one endpoint below the
+///   cutoff and one at or above it.
 ///
-/// `thresholds` holds one entry per output column for binary and multilabel
-/// and is ignored for multiclass.
+/// `thresholds` holds one entry per output column for binary, multilabel and
+/// regression, and is ignored for multiclass.
 pub fn score_flipper(
     model: &dyn Model,
     grid: &DataFrame,
@@ -191,7 +194,10 @@ pub fn score_flipper(
     // Each pair's labels and, per grid row, a score that crosses 0 exactly
     // where the decision changes.
     let (pair_labels, crossing): (Vec<Vec<usize>>, Vec<f64>) = match task {
-        TaskType::Binary => {
+        TaskType::Binary | TaskType::Regression => {
+            if task == TaskType::Regression {
+                check_pairs_straddle(grid, thresholds[0])?;
+            }
             let preds = Series::new("pred".into(), probs.swap_remove(0));
             let results = find_flip_points(grid, &preds, thresholds[0])?;
             let stability = calculate_flipper_stability(&results);
@@ -248,6 +254,27 @@ pub fn score_flipper(
         per_label,
         detour_rate,
     })
+}
+
+/// A regression grid pairs a patient below the cutoff with one at or above
+/// it. A pair that does not straddle `cutoff` came from a grid generated for
+/// another cutoff or another task, and its crossing would mean nothing.
+fn check_pairs_straddle(grid: &DataFrame, cutoff: f64) -> Result<(), CoreError> {
+    let label_a = series_to_f64(grid.column(LABEL_A_COL)?.as_materialized_series())?;
+    let label_b = series_to_f64(grid.column(LABEL_B_COL)?.as_materialized_series())?;
+    let bad = label_a
+        .iter()
+        .zip(&label_b)
+        .filter(|(a, b)| !(**a < cutoff && **b >= cutoff))
+        .count();
+    if bad == 0 {
+        return Ok(());
+    }
+    Err(CoreError::InvalidConfig(format!(
+        "{bad} flipper grid row(s) do not pair a target below {cutoff} with one at or above \
+         it; the grid was generated for another cutoff or task. Regenerate it with \
+         `simulate --task regression --flip-threshold {cutoff}`"
+    )))
 }
 
 fn never_flipped(results: &[FlipperPairResult]) -> f64 {
