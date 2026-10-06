@@ -202,7 +202,60 @@ fn unknown_output_name_lists_the_real_ones() {
 fn unknown_task_type_names_the_valid_ones() {
     let err = load_err("multiclass_tensor", r#"{"task_type": "multi-label"}"#, None);
     assert!(
-        err.contains("binary") && err.contains("multiclass") && err.contains("multilabel"),
+        err.contains("binary")
+            && err.contains("multiclass")
+            && err.contains("multilabel")
+            && err.contains("regression"),
         "got {err}"
     );
+}
+
+fn assert_predictions(model: &OnnxModel, fixture: &str, column: &str) {
+    let got = model.predict_proba(&probe()).unwrap();
+    assert_eq!(got.get_column_names(), [column]);
+    let want: Vec<f64> = expected()[fixture]["predictions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    let col = got.column(column).unwrap().f64().unwrap();
+    for (i, w) in want.iter().enumerate() {
+        let g = col.get(i).unwrap();
+        assert!((g - w).abs() < 1e-5, "{fixture} row {i}: got {g}, want {w}");
+    }
+}
+
+#[test]
+fn regression_linear_predicts_in_target_units() {
+    let model = load("regression_linear", r#"{"task_type": "regression"}"#, None).unwrap();
+    assert_eq!(model.task(), TaskType::Regression);
+    assert_eq!(model.decision_thresholds(), None);
+    assert_predictions(&model, "regression_linear", "prediction");
+}
+
+#[test]
+fn regression_forest_with_a_named_target() {
+    let contract = r#"{"task_type": "regression", "output": {"classes": ["hba1c"]}}"#;
+    let model = load("regression_forest", contract, None).unwrap();
+    assert_predictions(&model, "regression_forest", "hba1c");
+}
+
+#[test]
+fn a_classifier_declared_regression_has_no_prediction_output() {
+    let err = load_err("multiclass_tensor", r#"{"task_type": "regression"}"#, None);
+    assert!(err.contains("no prediction output"), "got {err}");
+    // Pointed at its probabilities by name, the [n, 3] width gives it away.
+    let err = load_err(
+        "multiclass_tensor",
+        r#"{"task_type": "regression", "output": {"name": "probabilities"}}"#,
+        None,
+    );
+    assert!(err.contains("3 columns"), "got {err}");
+}
+
+#[test]
+fn a_regressor_declared_binary_is_refused() {
+    let err = load_err("regression_linear", "{}", None);
+    assert!(err.contains("no probability output"), "got {err}");
 }

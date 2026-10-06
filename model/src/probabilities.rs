@@ -1,6 +1,6 @@
 //! Reading a classifier's probability output into one column per class,
-//! from every shape sklearn-onnx exports, and refusing outputs that cannot
-//! be scored honestly.
+//! or a regressor's predicted value into one column, from every shape
+//! sklearn-onnx exports, and refusing outputs that cannot be scored honestly.
 
 use crate::contract::{OutputSpec, CONTRACT_FILENAME};
 use ort::value::{DynMapValueType, DynSequenceValueType, DynTensorValueType, DynValue};
@@ -21,6 +21,7 @@ pub(crate) fn read_probabilities(
         TaskType::Multiclass | TaskType::Multilabel => {
             extract_all_probabilities(value, spec.task, &spec.columns)?
         }
+        TaskType::Regression => vec![extract_prediction(value)?],
     };
     check_columns(&columns, spec.task, n_rows)?;
     Ok(columns)
@@ -29,13 +30,17 @@ pub(crate) fn read_probabilities(
 fn check_columns(columns: &[Vec<f32>], task: TaskType, n_rows: usize) -> Result<(), CoreError> {
     let total: usize = columns.iter().map(Vec::len).sum();
     let nans = columns.iter().flatten().filter(|p| p.is_nan()).count();
+    let noun = match task {
+        TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => "probabilities",
+        TaskType::Regression => "predictions",
+    };
     if nans > 0 {
         // A NaN fill only means "missingness" to a NaN-native model.
         // Anything exported from sklearn-onnx propagates it straight
         // through, and a NaN probability silently poisons ROC AUC rather
         // than erroring. Refuse.
         return Err(CoreError::Generic(format!(
-            "{nans}/{total} probabilities came back NaN — this model is not NaN-native. \
+            "{nans}/{total} {noun} came back NaN — this model is not NaN-native. \
              Pass the value it was trained with (e.g. --null-fill 0), or declare \
              `input.absent_sentinel` in its {CONTRACT_FILENAME}."
         )));
@@ -48,7 +53,24 @@ fn check_columns(columns: &[Vec<f32>], task: TaskType, n_rows: usize) -> Result<
     }
     match task {
         TaskType::Multiclass => check_rows_sum_to_one(columns),
-        TaskType::Binary | TaskType::Multilabel => Ok(()),
+        TaskType::Binary | TaskType::Multilabel | TaskType::Regression => Ok(()),
+    }
+}
+
+/// A regressor's output: a `tensor(float)` of shape `[n]` or `[n, 1]`. The
+/// value is in the target's units, so nothing is range-checked.
+fn extract_prediction(value: &DynValue) -> Result<Vec<f32>, CoreError> {
+    let (shape, data) = value.try_extract_tensor::<f32>().map_err(|e| {
+        CoreError::Generic(format!(
+            "a regression model's output must be a float tensor of shape [n] or [n, 1]: {e}"
+        ))
+    })?;
+    match **shape {
+        [_] | [_, 1] => Ok(data.to_vec()),
+        _ => Err(CoreError::Generic(format!(
+            "prediction tensor has shape {shape:?}; a single-target regression model \
+             returns [n] or [n, 1]"
+        ))),
     }
 }
 
