@@ -101,6 +101,27 @@ pub(crate) fn label_resiliency(
     }
 }
 
+/// The variance behind the headline `jitter_stability`, from each output
+/// column's mean jitter variance.
+///
+/// Multilabel labels are separate binary decisions, so their variances are
+/// averaged like every other per-label score. A multiclass probability vector
+/// moves as one: mass leaving one class arrives in another. Its variance is
+/// therefore *summed* over classes and halved, which is the binary variance
+/// for two classes and does not change when a class the model never predicts
+/// is added. Averaging over K instead would score the same movement as K/2
+/// times more stable for every extra class.
+pub(crate) fn headline_jitter_variance(task: TaskType, per_column: &[Option<f64>]) -> Option<f64> {
+    match task {
+        TaskType::Binary | TaskType::Multilabel => mean_some(per_column.iter().copied()),
+        TaskType::Multiclass => per_column
+            .iter()
+            .copied()
+            .sum::<Option<f64>>()
+            .map(|total| total / 2.0),
+    }
+}
+
 /// Mean jitter variance of each output column across the draws.
 pub(crate) fn jitter_variances(draws: &[Columns], k: usize) -> Result<Vec<Option<f64>>, CoreError> {
     (0..k)
@@ -250,4 +271,36 @@ pub(crate) fn average_multi(scores: Vec<MultiOutputScores>) -> Option<MultiOutpu
         excluded_labels: excluded,
         per_label,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiclass_jitter_does_not_depend_on_the_number_of_classes() {
+        let v = |xs: &[f64]| xs.iter().copied().map(Some).collect::<Vec<_>>();
+        // 2-class softmax: both columns move together, so the headline equals
+        // the binary positive-class variance.
+        assert_eq!(
+            headline_jitter_variance(TaskType::Multiclass, &v(&[0.01, 0.01])),
+            Some(0.01)
+        );
+        // The same movement with never-predicted classes added scores the same.
+        let three = headline_jitter_variance(TaskType::Multiclass, &v(&[0.01, 0.01, 0.0]));
+        let six =
+            headline_jitter_variance(TaskType::Multiclass, &v(&[0.01, 0.01, 0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(three, Some(0.01));
+        assert_eq!(six, Some(0.01));
+        // Multilabel labels are independent decisions: averaged.
+        assert_eq!(
+            headline_jitter_variance(TaskType::Multilabel, &v(&[0.02, 0.0])),
+            Some(0.01)
+        );
+        // Fewer than two draws: nothing to measure.
+        assert_eq!(
+            headline_jitter_variance(TaskType::Multiclass, &[None, None]),
+            None
+        );
+    }
 }

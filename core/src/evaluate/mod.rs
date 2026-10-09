@@ -19,8 +19,8 @@ use crate::schema::{
 use chrono::Utc;
 use metrics::{jitter_stability_from_variance, series_to_f64};
 use multi::{
-    average_multi, decision_thresholds, jitter_variances, label_matrix, label_resiliency,
-    mean_some, multi_output_scores, per_label_auc, Columns, LabelBreakdown,
+    average_multi, decision_thresholds, headline_jitter_variance, jitter_variances, label_matrix,
+    label_resiliency, mean_some, multi_output_scores, per_label_auc, Columns, LabelBreakdown,
 };
 use polars::prelude::*;
 use std::collections::HashMap;
@@ -217,8 +217,9 @@ impl Evaluator {
         Ok(SingleDatasetScores {
             baseline,
             resiliency: mean_some(resiliency.iter().copied()).unwrap_or(1.0),
-            jitter_stability: jitter_stability_from_variance(mean_some(
-                jitter_variance.iter().copied(),
+            jitter_stability: jitter_stability_from_variance(headline_jitter_variance(
+                task,
+                &jitter_variance,
             )),
             flipper_stability: flipper.map(|f| f.stability),
             multi,

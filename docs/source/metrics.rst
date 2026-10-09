@@ -149,16 +149,24 @@ absent for binary models.
        minimum, because blacking out one assay often wrecks a single label
        while the average barely moves.
    * - Jitter stability
-     - ``v`` is averaged over the K columns before the ``1 / (1 + 100 × v)``
-       squash. For a 2-class softmax this equals the binary score, so values
-       stay comparable. ``multi.decision_flip_rate`` is the share of patients
+     - Multilabel: ``v`` is averaged over the labels before the
+       ``1 / (1 + 100 × v)`` squash, like every other per-label score.
+       Multiclass: ``v`` is the per-class variances *summed* and halved,
+       because probability leaving one class arrives in another. For a
+       2-class softmax this equals the binary score, and adding a class the
+       model never predicts does not change it. (An average over K would make
+       the same movement look more stable for every extra class.)
+       ``multi.decision_flip_rate`` is the share of patients
        whose *decision* changes between jitter draws: the argmax class
        (multiclass) or the set of labels at or over threshold (multilabel).
    * - Flipper stability
      - Multiclass: pairs are drawn from two different classes a and b, and
        the flip is where ``p[b] − p[a]`` crosses 0; ``--flip-threshold`` is
        not used. ``multi.flipper_detour_rate`` is the share of paths whose
-       argmax passes through a third class. Multilabel: each pair is sampled
+       argmax passes through a third class. For ordered classes, such as
+       normal, prediabetes and diabetes, a path from the first to the last
+       *should* pass through the middle one, so a high detour rate there is
+       expected rather than a sign of instability. Multilabel: each pair is sampled
        *for one label*, a negative and a positive patient for that label, and
        the flip is where that label crosses its threshold (contract
        ``output.thresholds``, else ``--flip-threshold``).
