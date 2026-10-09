@@ -7,10 +7,11 @@ pub mod simulate;
 pub use compare::Comparer;
 pub use error::CoreError;
 pub use evaluate::{
-    calculate_flipper_stability, find_flip_points, Evaluator, FlipperPairResult, Model,
+    calculate_flipper_stability, find_flip_points, Evaluator, FlipperPairResult, FlipperScores,
+    Model,
 };
 pub use schema::*;
 pub use simulate::{
-    flipper::{is_flipper_meta_column, FLIPPER_META_COLS, PAIR_ID_COL, STEP_COL},
+    flipper::{is_flipper_meta_column, FLIPPER_META_COLS, PAIR_ID_COL, PAIR_LABEL_COL, STEP_COL},
     BlackoutSimulator, FlipperSimulator, JitterSimulator, Simulator,
 };

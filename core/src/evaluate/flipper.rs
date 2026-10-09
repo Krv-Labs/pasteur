@@ -1,8 +1,10 @@
-use super::Model;
+use super::metrics::series_to_f64;
+use super::{predict_matrix, Model};
 use crate::error::CoreError;
+use crate::schema::TaskType;
 use crate::simulate::flipper::{
-    is_flipper_meta_column, LABEL_A_COL, LABEL_B_COL, PAIR_ID_COL, SOURCE_A_ROW_COL,
-    SOURCE_B_ROW_COL, STEP_COL, T_COL,
+    is_flipper_meta_column, LABEL_A_COL, LABEL_B_COL, PAIR_ID_COL, PAIR_LABEL_COL,
+    SOURCE_A_ROW_COL, SOURCE_B_ROW_COL, STEP_COL, T_COL,
 };
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -129,16 +131,171 @@ pub fn flipper_model_features(grid: &DataFrame) -> Result<DataFrame, CoreError> 
     Ok(grid.select(names)?)
 }
 
-/// Run model inference on a flipper grid and return flipper stability.
+/// Run model inference on a flipper grid and return flipper stability, for a
+/// binary model. See `score_flipper` for multi-output models.
 pub fn score_flipper_grid(
     model: &dyn Model,
     grid: &DataFrame,
     flip_threshold: f64,
 ) -> Result<f64, CoreError> {
+    Ok(score_flipper(model, grid, TaskType::Binary, 1, &[flip_threshold])?.stability)
+}
+
+#[derive(Debug, Clone)]
+pub struct FlipperScores {
+    pub stability: f64,
+    /// Share of pairs that never crossed (and so counted as 1.0 above).
+    pub never_flipped: f64,
+    /// Per output column: stability over the pairs about that label (the
+    /// pair's `pair_label` for multilabel, either endpoint's class for
+    /// multiclass). `None` when no pair involved it.
+    pub per_label: Vec<Option<f64>>,
+    /// Multiclass only: share of pairs whose argmax visits a third class.
+    pub detour_rate: Option<f64>,
+}
+
+/// Flipper stability for any task, reduced to the binary flip finder by
+/// turning each grid row into a score that crosses 0 where the decision
+/// changes:
+///
+/// - binary: `p − flip_threshold`, which is the original computation;
+/// - multiclass: the pairwise margin `p[class_b] − p[class_a]`, since the
+///   decision is an argmax and no single threshold applies;
+/// - multilabel: `p[k] − threshold[k]` for the label `k` the pair was sampled
+///   for, read from the grid's `pair_label` column.
+///
+/// `thresholds` holds one entry per output column for binary and multilabel
+/// and is ignored for multiclass.
+pub fn score_flipper(
+    model: &dyn Model,
+    grid: &DataFrame,
+    task: TaskType,
+    n_outputs: usize,
+    thresholds: &[f64],
+) -> Result<FlipperScores, CoreError> {
+    let has_pair_label = grid.get_column_index(PAIR_LABEL_COL).is_some();
+    if has_pair_label != (task == TaskType::Multilabel) {
+        return Err(CoreError::InvalidConfig(format!(
+            "flipper grid was generated for {} pairs but this is a {task} evaluation; \
+             regenerate it with `simulate --task {task}` and the same label groups",
+            if has_pair_label {
+                "multilabel"
+            } else {
+                "binary/multiclass"
+            }
+        )));
+    }
     let features = flipper_model_features(grid)?;
-    let predictions = model.predict_proba(&features)?;
-    let results = find_flip_points(grid, &predictions, flip_threshold)?;
-    Ok(calculate_flipper_stability(&results))
+    let mut probs = predict_matrix(model, &features, n_outputs)?;
+
+    // Each pair's labels and, per grid row, a score that crosses 0 exactly
+    // where the decision changes.
+    let (pair_labels, crossing): (Vec<Vec<usize>>, Vec<f64>) = match task {
+        TaskType::Binary => {
+            let preds = Series::new("pred".into(), probs.swap_remove(0));
+            let results = find_flip_points(grid, &preds, thresholds[0])?;
+            let stability = calculate_flipper_stability(&results);
+            return Ok(FlipperScores {
+                stability,
+                never_flipped: never_flipped(&results),
+                per_label: vec![Some(stability)],
+                detour_rate: None,
+            });
+        }
+        TaskType::Multiclass => {
+            let class_a = class_indices(grid, LABEL_A_COL, n_outputs)?;
+            let class_b = class_indices(grid, LABEL_B_COL, n_outputs)?;
+            class_a
+                .into_iter()
+                .zip(class_b)
+                .enumerate()
+                .map(|(row, (a, b))| (vec![a, b], probs[b][row] - probs[a][row]))
+                .unzip()
+        }
+        TaskType::Multilabel => class_indices(grid, PAIR_LABEL_COL, n_outputs)?
+            .into_iter()
+            .enumerate()
+            .map(|(row, k)| (vec![k], probs[k][row] - thresholds[k]))
+            .unzip(),
+    };
+    let results = find_flip_points(grid, &Series::new("crossing".into(), crossing), 0.0)?;
+
+    // Every row of a pair carries the same labels; take the first.
+    let pair_id = grid.column(PAIR_ID_COL)?.u32()?;
+    let mut labels_of_pair: HashMap<u32, &[usize]> = HashMap::new();
+    for (i, labels) in pair_labels.iter().enumerate() {
+        labels_of_pair
+            .entry(pair_id.get(i).unwrap_or(0))
+            .or_insert(labels);
+    }
+    let per_label = (0..n_outputs)
+        .map(|k| {
+            let about_k: Vec<FlipperPairResult> = results
+                .iter()
+                .filter(|r| labels_of_pair[&r.pair_id].contains(&k))
+                .cloned()
+                .collect();
+            (!about_k.is_empty()).then(|| calculate_flipper_stability(&about_k))
+        })
+        .collect();
+
+    let detour_rate = (task == TaskType::Multiclass)
+        .then(|| detour_rate(&probs, pair_id, &pair_labels, results.len()));
+
+    Ok(FlipperScores {
+        stability: calculate_flipper_stability(&results),
+        never_flipped: never_flipped(&results),
+        per_label,
+        detour_rate,
+    })
+}
+
+fn never_flipped(results: &[FlipperPairResult]) -> f64 {
+    if results.is_empty() {
+        return 0.0;
+    }
+    results.iter().filter(|r| r.flip_t.is_none()).count() as f64 / results.len() as f64
+}
+
+/// Share of pairs where, at some step, the argmax class is neither endpoint's
+/// class — the straight path from class a to class b runs through class c.
+fn detour_rate(
+    probs: &[Vec<f64>],
+    pair_id: &UInt32Chunked,
+    pair_labels: &[Vec<usize>],
+    n_pairs: usize,
+) -> f64 {
+    if n_pairs == 0 {
+        return 0.0;
+    }
+    let mut detoured = std::collections::HashSet::new();
+    for (i, ends) in pair_labels.iter().enumerate() {
+        let argmax = (0..probs.len())
+            .max_by(|&a, &b| probs[a][i].total_cmp(&probs[b][i]))
+            .unwrap_or(0);
+        if !ends.contains(&argmax) {
+            detoured.insert(pair_id.get(i).unwrap_or(0));
+        }
+    }
+    detoured.len() as f64 / n_pairs as f64
+}
+
+/// A grid column of class or label indices, each checked to be a whole
+/// number below `n_outputs`.
+fn class_indices(grid: &DataFrame, col: &str, n_outputs: usize) -> Result<Vec<usize>, CoreError> {
+    series_to_f64(grid.column(col)?.as_materialized_series())?
+        .into_iter()
+        .map(|v| {
+            if v.fract() == 0.0 && v >= 0.0 && (v as usize) < n_outputs {
+                Ok(v as usize)
+            } else {
+                Err(CoreError::InvalidConfig(format!(
+                    "flipper grid `{col}` holds {v}, not a class index below {n_outputs}; \
+                     was the grid generated with the same --task and label groups?"
+                )))
+            }
+        })
+        .collect()
 }
 
 /// Mean flip fraction across all pairs — pairs that never flip are treated

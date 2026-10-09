@@ -50,7 +50,12 @@ Important options:
      - Number of jitter variants
    * - ``--positive-group-id``
      - ``103``
-     - Group treated as the positive cohort
+     - Group treated as the positive cohort. Repeat once per class or label
+       for ``--task multiclass`` / ``multilabel``
+   * - ``--task``
+     - ``binary``
+     - ``binary``, ``multiclass``, or ``multilabel``: how flipper pairs are
+       sampled
    * - ``--flipper-pairs``
      - ``200``
      - Opposite-label patient pairs to sample for flipper
@@ -116,7 +121,11 @@ from each.
      - Local ``.onnx`` file
    * - ``--positive-group-id``
      - ``103``
-     - Group treated as the positive cohort
+     - Group treated as the positive cohort. Repeat once per model output,
+       in ``output.classes`` order, for multiclass and multilabel models
+   * - ``--task``
+     - ``binary``
+     - Must match the model's ``metadata.json`` ``task_type``
    * - ``--contract``
      - next to model
      - Path to ``metadata.json`` when it is not beside the ONNX file
@@ -128,10 +137,12 @@ from each.
      - Value sent to the model for missing inputs
    * - ``--positive-class-index``
      - ``1``
-     - Column of the probability output that is the positive class
+     - Binary only: column of the probability output that is the positive
+       class. Rejected for multiclass and multilabel models
    * - ``--flip-threshold``
      - ``0.5``
-     - Decision threshold used by flipper stability
+     - Decision threshold used by flipper stability. Multilabel: applies to
+       labels without a contract threshold. Unused for multiclass (argmax)
    * - ``-o``, ``--output``
      - stdout
      - Write the JSON result to a file. The directory must already exist.
@@ -156,6 +167,22 @@ Models are labelled by file name, so give each one a different name
 (``a.onnx``, ``b.onnx``); two files both called ``model.onnx`` collide.
 ``--predictions-out`` writes one probability column per model plus
 ``all_agree``. A single ``--contract`` applies to every model.
+
+For a multiclass or multilabel model, pass the task and one group per output:
+
+.. code-block:: bash
+
+   pasteur-cli simulate --input ./clean.parquet --output ./sim \
+     --labels ./labels/groups.parquet --task multiclass \
+     --positive-group-id 1 --positive-group-id 2 --positive-group-id 3
+
+   pasteur-cli evaluate flipper --sim-root ./sim \
+     --labels ./labels/groups.parquet --model ./models/model.onnx \
+     --task multiclass \
+     --positive-group-id 1 --positive-group-id 2 --positive-group-id 3
+
+The model's ``metadata.json`` must declare ``task_type`` and
+``output.classes``; see :doc:`data-contracts`.
 
 cache
 -----

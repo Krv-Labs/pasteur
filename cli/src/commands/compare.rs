@@ -14,7 +14,8 @@ pub fn run(args: CompareArgs) -> Result<()> {
         &args.sim_root,
         &args.sim_type,
         &args.labels,
-        args.positive_group_id,
+        &args.positive_group_ids,
+        args.task.into(),
         &args.dataset_name,
         args.flip_threshold,
     )?;
@@ -46,7 +47,7 @@ pub fn run(args: CompareArgs) -> Result<()> {
 }
 
 fn load_models(args: &CompareArgs, feature_order: &[String]) -> Result<Vec<(String, OnnxModel)>> {
-    let mut models = Vec::with_capacity(args.models.len());
+    let mut models: Vec<(String, OnnxModel)> = Vec::with_capacity(args.models.len());
     for model_path in &args.models {
         let label = model_label(model_path);
         let model = load_model(
@@ -56,8 +57,33 @@ fn load_models(args: &CompareArgs, feature_order: &[String]) -> Result<Vec<(Stri
             args.positive_class_index,
             args.null_fill,
             args.contract.as_deref(),
+            args.task.into(),
         )?;
+        check_comparable(&models, &label, &model)?;
         models.push((label, model));
     }
     Ok(models)
+}
+
+/// Results and prediction columns are keyed by model file name and read in
+/// one class order, so a model joining the comparison must have a new name
+/// and the same output columns as the models already loaded.
+fn check_comparable(loaded: &[(String, OnnxModel)], label: &str, model: &OnnxModel) -> Result<()> {
+    if loaded.iter().any(|(existing, _)| existing == label) {
+        anyhow::bail!(
+            "two --model files are both named {label:?}; per-model columns and results are \
+             keyed by file name, so rename one"
+        );
+    }
+    match loaded.first() {
+        Some((first_label, first)) if model.output_columns() != first.output_columns() => {
+            anyhow::bail!(
+                "{label} outputs {:?} but {first_label} outputs {:?}; compared models must \
+                 share one class order",
+                model.output_columns(),
+                first.output_columns()
+            )
+        }
+        _ => Ok(()),
+    }
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use pasteur_core::{Model, SimulationVariant};
+use pasteur_core::{Model, SimulationVariant, TaskType};
 use pasteur_model::OnnxModel;
 use polars::prelude::*;
 
@@ -11,7 +11,7 @@ pub fn build_predictions_table(
     models: &[(String, OnnxModel)],
 ) -> Result<DataFrame> {
     let dataset_key = &inputs.dataset_name;
-    let mut rows = PredictionRows::new(models.len());
+    let mut rows = PredictionRows::new(models, inputs.eval_config.task);
     rows.append_variant("clean", &inputs.clean_datasets[dataset_key], inputs, models)?;
     for (name, per_dataset) in &inputs.simulation_variants {
         rows.append_variant(name, &per_dataset[dataset_key], inputs, models)?;
@@ -20,19 +20,30 @@ pub fn build_predictions_table(
 }
 
 struct PredictionRows {
+    task: TaskType,
+    /// Output column names shared by every model (checked at load).
+    classes: Vec<String>,
     source_row_id: Vec<String>,
     variant_name: Vec<String>,
-    label: Vec<i64>,
-    per_model_preds: Vec<Vec<f64>>,
+    /// `labels[column][row]`.
+    labels: Vec<Vec<i64>>,
+    /// `per_model_preds[model][column][row]`.
+    per_model_preds: Vec<Vec<Vec<f64>>>,
 }
 
 impl PredictionRows {
-    fn new(n_models: usize) -> Self {
+    fn new(models: &[(String, OnnxModel)], task: TaskType) -> Self {
+        let classes = models
+            .first()
+            .map(|(_, m)| m.output_columns().to_vec())
+            .unwrap_or_default();
         Self {
+            task,
             source_row_id: Vec::new(),
             variant_name: Vec::new(),
-            label: Vec::new(),
-            per_model_preds: vec![Vec::new(); n_models],
+            labels: vec![Vec::new(); classes.len()],
+            per_model_preds: vec![vec![Vec::new(); classes.len()]; models.len()],
+            classes,
         }
     }
 
@@ -44,60 +55,74 @@ impl PredictionRows {
         models: &[(String, OnnxModel)],
     ) -> Result<()> {
         let n = variant.x.height();
+        let k = self.classes.len();
+        if variant.y.width() != k {
+            anyhow::bail!(
+                "{name} has {} label columns for {k} model outputs",
+                variant.y.width()
+            );
+        }
         let ids = variant_source_row_ids(variant, &inputs.source_row_id)?;
         let id_strings = ids.str()?;
-        let labels_series = variant.y.cast(&DataType::Int64)?;
-        let labels = labels_series.i64()?;
         let x = model_feature_frame(variant, &inputs.feature_order)?;
 
         for i in 0..n {
             self.source_row_id
                 .push(id_strings.get(i).unwrap_or("").to_string());
             self.variant_name.push(name.to_string());
-            self.label.push(labels.get(i).unwrap_or(0));
         }
-        append_model_pred_rows(&mut self.per_model_preds, models, &x, n)?;
+        for (out, col) in self.labels.iter_mut().zip(variant.y.columns()) {
+            let col = col.cast(&DataType::Int64)?;
+            let col = col.i64()?;
+            out.extend((0..n).map(|i| col.get(i).unwrap_or(0)));
+        }
+        for (preds, (_, model)) in self.per_model_preds.iter_mut().zip(models) {
+            let frame = model.predict_proba(&x)?;
+            if frame.width() != k {
+                anyhow::bail!("model returned {} columns for {k} outputs", frame.width());
+            }
+            for (out, col) in preds.iter_mut().zip(frame.columns()) {
+                let col = col.cast(&DataType::Float64)?;
+                let col = col.f64()?;
+                out.extend((0..n).map(|i| col.get(i).unwrap_or(f64::NAN)));
+            }
+        }
         Ok(())
     }
 }
 
+/// Binary keeps its original columns (`label`, one column per model).
+/// Multi-output models get `label__<class>` and `<model>__<class>` per class.
 fn assemble_dataframe(rows: PredictionRows, models: &[(String, OnnxModel)]) -> DataFrame {
     let n_rows = rows.source_row_id.len();
+    let binary = rows.task.is_binary();
+    let suffix = |prefix: &str, class: &str| {
+        if binary {
+            prefix.to_string()
+        } else {
+            format!("{prefix}__{class}")
+        }
+    };
     let mut columns: Vec<Column> = vec![
         Series::new("source_row_id".into(), rows.source_row_id).into(),
         Series::new("variant_name".into(), rows.variant_name).into(),
-        Series::new("label".into(), rows.label).into(),
     ];
-    let all_agree = build_all_agree_column(&rows.per_model_preds, n_rows);
+    for (class, labels) in rows.classes.iter().zip(rows.labels) {
+        columns.push(Series::new(suffix("label", class).as_str().into(), labels).into());
+    }
+    let thresholds: Vec<Vec<f64>> = models
+        .iter()
+        .map(|(_, m)| {
+            m.decision_thresholds()
+                .unwrap_or_else(|| vec![0.5; rows.classes.len()])
+        })
+        .collect();
+    let all_agree = build_all_agree_column(&rows.per_model_preds, &thresholds, rows.task, n_rows);
     for ((model_label, _), preds) in models.iter().zip(rows.per_model_preds) {
-        columns.push(Series::new(model_label.as_str().into(), preds).into());
+        for (class, col) in rows.classes.iter().zip(preds) {
+            columns.push(Series::new(suffix(model_label, class).as_str().into(), col).into());
+        }
     }
     columns.push(Series::new("all_agree".into(), all_agree).into());
     DataFrame::new(n_rows, columns).expect("prediction columns aligned")
-}
-
-fn append_model_pred_rows(
-    per_model_preds: &mut [Vec<f64>],
-    models: &[(String, OnnxModel)],
-    x: &DataFrame,
-    n: usize,
-) -> Result<()> {
-    for (mi, (_, model)) in models.iter().enumerate() {
-        append_one_model_preds(&mut per_model_preds[mi], model, x, n)?;
-    }
-    Ok(())
-}
-
-fn append_one_model_preds(
-    out: &mut Vec<f64>,
-    model: &OnnxModel,
-    x: &DataFrame,
-    n: usize,
-) -> Result<()> {
-    let pred_series = model.predict_proba(x)?.cast(&DataType::Float64)?;
-    let preds = pred_series.f64()?;
-    for i in 0..n {
-        out.push(preds.get(i).unwrap_or(f64::NAN));
-    }
-    Ok(())
 }

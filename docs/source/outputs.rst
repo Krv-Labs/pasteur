@@ -42,8 +42,11 @@ Flipper metadata
 ----------------
 
 Flipper output also contains ``pair_id``, ``step``, ``t``, ``source_a_row``,
-``source_b_row``, ``label_a``, and ``label_b``. Evaluation strips these metadata
-columns before model scoring.
+``source_b_row``, ``label_a``, and ``label_b``. Grids simulated with
+``--task multilabel`` also contain ``pair_label``, the index of the label the
+pair was sampled for. For multiclass grids ``label_a`` and ``label_b`` are
+class indices in ``--positive-group-id`` order. Evaluation strips these
+metadata columns before model scoring.
 
 Evaluation JSON
 ---------------
@@ -72,6 +75,26 @@ Evaluation JSON
 ``flipper_stability`` is populated for flipper evaluation and null for blackout
 or jitter runs.
 
+Multiclass and multilabel results add a ``multi`` object. The headline fields
+above hold macro averages; :doc:`metrics` defines each field.
+
+.. code-block:: json
+
+   "multi": {
+     "task": "multilabel",
+     "roc_auc_micro": 0.93,
+     "worst_label_resiliency": 0.81,
+     "decision_flip_rate": 0.06,
+     "flipper_never_flipped": 0.37,
+     "excluded_labels": [],
+     "per_label": [
+       {"label": "diabetes", "roc_auc": 0.90, "resiliency": 0.81,
+        "jitter_stability": 0.95, "flipper_stability": 0.63}
+     ]
+   }
+
+Multiclass results also carry ``flipper_detour_rate``.
+
 Comparison predictions
 ----------------------
 
@@ -79,8 +102,9 @@ When ``compare`` receives ``--predictions-out``, the parquet contains:
 
 - ``source_row_id``
 - ``variant_name``
-- ``label``
-- one floating-point probability column per model
+- ``label`` (multi-output: ``label__<class>`` per class)
+- one floating-point probability column per model (multi-output:
+  ``<model>__<class>`` per class)
 - ``all_agree``
 
 The model column name is derived from the model file stem.

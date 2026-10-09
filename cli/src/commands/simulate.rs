@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use pasteur_core::{
     simulate::flipper::{PAIR_ID_COL, STEP_COL},
     BlackoutConfig, BlackoutSimulator, FlipperConfig, FlipperSimulator, JitterConfig,
-    JitterSimulator, Simulator,
+    JitterSimulator, Simulator, TaskType,
 };
 use pasteur_hf::layout;
 use polars::prelude::*;
 
 use crate::args::SimulateArgs;
-use crate::data::derive_labels_from_file;
+use crate::data::{class_indices, derive_label_matrix};
 use crate::io::{read_parquet, with_ids, write_variant};
 
 pub fn run(args: SimulateArgs) -> Result<()> {
@@ -137,7 +137,8 @@ fn run_flipper(
     labels_path: &std::path::Path,
     source_row_id: &Series,
 ) -> Result<()> {
-    let labels = derive_labels_from_file(labels_path, args.positive_group_id, source_row_id)?;
+    let task = TaskType::from(args.task);
+    let labels = derive_label_matrix(labels_path, &args.positive_group_ids, task, source_row_id)?;
     let config = FlipperConfig {
         n_pairs: args.flipper_pairs,
         n_steps: args.flipper_steps,
@@ -145,7 +146,15 @@ fn run_flipper(
         positive_class_label: None,
         random_state: Some(args.random_state),
     };
-    let grid = FlipperSimulator::new(config).generate(features, &labels)?;
+    let simulator = FlipperSimulator::new(config);
+    // Binary pairs across the positive cohort; multiclass across two classes
+    // (label_a/label_b hold class indices in --positive-group-id order);
+    // multilabel across one label per pair (recorded in `pair_label`).
+    let grid = match task {
+        TaskType::Binary => simulator.generate(features, labels[0].as_materialized_series())?,
+        TaskType::Multiclass => simulator.generate(features, &class_indices(&labels)?)?,
+        TaskType::Multilabel => simulator.generate_multilabel(features, &labels)?,
+    };
     let out = with_flipper_ids(&grid)?;
     write_variant(&args.output, "flipper", "flipper", &out)
 }

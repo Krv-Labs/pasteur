@@ -4,10 +4,9 @@ use std::collections::HashMap;
 
 struct MockModel;
 impl Model for MockModel {
-    fn predict_proba(&self, df: &DataFrame) -> Result<Series, CoreError> {
+    fn predict_proba(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
         // Return values proportional to the feature "val"
-        let val = df.column("val")?;
-        Ok(val.as_materialized_series().clone())
+        Ok(df.select(["val"])?)
     }
 }
 
@@ -18,7 +17,7 @@ fn test_full_pipeline() -> Result<(), CoreError> {
         "val" => [0.1, 0.8, 0.2, 0.9],
         "target" => [0, 1, 0, 1]
     ]?;
-    let y = df.column("target")?.as_materialized_series().clone();
+    let y = df.select(["target"])?;
     let x = df.drop("target")?;
 
     let variant = SimulationVariant {
@@ -60,6 +59,7 @@ fn test_full_pipeline() -> Result<(), CoreError> {
         allow_partial: false,
         metrics: vec!["roc_auc".to_string()],
         flip_threshold: 0.5,
+        task: TaskType::Binary,
     };
 
     let model = MockModel;
@@ -83,7 +83,7 @@ fn test_flipper_evaluation() -> Result<(), CoreError> {
         "f1" => [0.0, 1.0, 0.0, 1.0],
         "f2" => [0.0, 0.0, 1.0, 1.0],
     ]?;
-    let y = Series::new("y".into(), &[0i64, 1, 0, 1]);
+    let y = df!["y" => [0i64, 1, 0, 1]]?;
     let x = df.clone();
 
     let grid = df![
@@ -113,21 +113,21 @@ fn test_flipper_evaluation() -> Result<(), CoreError> {
         "test".to_string(),
         SimulationVariant {
             x: grid,
-            y: Series::new("y".into(), &[0i64, 0, 0]),
+            y: df!["y" => [0i64, 0, 0]]?,
         },
     );
     simulation_variants.insert("flipper".to_string(), flipper_variants);
 
     struct ThresholdModel;
     impl Model for ThresholdModel {
-        fn predict_proba(&self, df: &DataFrame) -> Result<Series, CoreError> {
+        fn predict_proba(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
             let f1 = df.column("f1")?.f64()?;
             let mut out = Vec::with_capacity(df.height());
             for i in 0..df.height() {
                 let v = f1.get(i).unwrap_or(0.0);
                 out.push(if v >= 0.5 { 1.0 } else { 0.0 });
             }
-            Ok(Series::new("p".into(), out))
+            Ok(df!["p" => out]?)
         }
     }
 
@@ -137,6 +137,7 @@ fn test_flipper_evaluation() -> Result<(), CoreError> {
         allow_partial: false,
         metrics: vec!["roc_auc".to_string()],
         flip_threshold: 0.5,
+        task: TaskType::Binary,
     };
     let result = eval.run(
         &ThresholdModel,

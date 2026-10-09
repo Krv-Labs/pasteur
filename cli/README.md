@@ -57,7 +57,8 @@ pasteur-cli simulate \
 | `--blackout-rate` | `0.1` | Blackout mask rate |
 | `--jitter-scale` | `1.0` | Jitter noise scale |
 | `--jitter-iters` | `3` | Number of `jitter_<i>` variants |
-| `--positive-group-id` | `103` | `group_id` for positive cohort (flipper) |
+| `--positive-group-id` | `103` | `group_id` for positive cohort (flipper). Repeat once per class/label for `--task multiclass`/`multilabel` |
+| `--task` | `binary` | `binary`, `multiclass`, or `multilabel`: how flipper pairs are sampled |
 | `--flipper-pairs` | `200` | Cross-label pairs to sample |
 | `--flipper-steps` | `20` | Interpolation steps per pair |
 | `--random-state` | `42` | RNG seed |
@@ -118,10 +119,11 @@ pasteur-cli evaluate blackout \
 | `--contract` | — | Explicit `metadata.json` path (default: next to `--model`) |
 | `--input-name` | `input` | ONNX input tensor name |
 | `--null-fill` | *(see below)* | What a null becomes on the way into the model |
-| `--positive-class-index` | `1` | Positive class column in prob output |
-| `--positive-group-id` | `103` | `group_id` for positive cohort |
+| `--positive-class-index` | `1` | Binary only: positive class column in prob output |
+| `--positive-group-id` | `103` | `group_id` for positive cohort; repeat once per model output (in `output.classes` order) for multiclass/multilabel |
+| `--task` | `binary` | Must match the model's `metadata.json` `task_type` |
 | `--dataset-name` | `simulation` | Internal dataset key in JSON |
-| `--flip-threshold` | `0.5` | Decision threshold for flipper stability |
+| `--flip-threshold` | `0.5` | Decision threshold for flipper stability (multilabel: labels without a contract threshold; unused for multiclass) |
 | `-o, --output` | stdout | Write `EvaluationResult` JSON to file |
 
 ---
