@@ -98,4 +98,4 @@ cargo test --workspace --exclude pypasteur-bindings
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Pushing a `v*` tag runs `.github/workflows/release.yml`.
 
-Automation: publishing simulations of public or synthetic datasets to Hugging Face is described in [AGENTS.md](AGENTS.md), with agent skills under [`.agents/skills/`](.agents/skills/). Never publish bundles made from patient data.
+Automation: the rules for agents are in [AGENTS.md](AGENTS.md), and the publishing workflow is in the agent skills under [`.agents/skills/`](.agents/skills/). Never publish bundles made from patient data.
