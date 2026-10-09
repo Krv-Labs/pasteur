@@ -159,6 +159,68 @@ impl FlipperSimulator {
         self.interpolate(x, &pairs)
     }
 
+    /// Regression counterpart of `generate`. A continuous target has no
+    /// classes to pair across, so `cutoff` (a clinical threshold in the
+    /// target's units) supplies them: each pair is a row `a` whose target is
+    /// below `cutoff` and a row `b` whose target is at or above it.
+    /// `label_a`/`label_b` hold the two true target values, so the grid
+    /// records which cutoff it was built for. Rows with a missing or
+    /// non-finite target are never sampled.
+    pub fn generate_regression(
+        &self,
+        x: &DataFrame,
+        y: &Series,
+        cutoff: f64,
+    ) -> Result<DataFrame, CoreError> {
+        if x.height() != y.len() {
+            return Err(CoreError::InvalidConfig(format!(
+                "x has {} rows but y has {} — must match",
+                x.height(),
+                y.len()
+            )));
+        }
+        if !cutoff.is_finite() {
+            return Err(CoreError::InvalidConfig(format!(
+                "flipper cutoff must be a finite number, got {cutoff}"
+            )));
+        }
+        let y = y.cast(&DataType::Float64)?;
+        let targets: Vec<(usize, f64)> = y
+            .f64()?
+            .iter()
+            .enumerate()
+            .filter_map(|(row, v)| Some((row, v.filter(|v| v.is_finite())?)))
+            .collect();
+        let (below, at_or_above): (Vec<_>, Vec<_>) =
+            targets.into_iter().partition(|(_, v)| *v < cutoff);
+        if below.is_empty() || at_or_above.is_empty() {
+            return Err(CoreError::InvalidConfig(format!(
+                "FlipperSimulator needs targets on both sides of the cutoff {cutoff}: \
+                 {} row(s) below it, {} at or above it",
+                below.len(),
+                at_or_above.len()
+            )));
+        }
+
+        let mut rng = self.rng();
+        let pairs: Vec<Pair> = (0..self.config.n_pairs)
+            .map(|_| {
+                let &(row_a, label_a) = below.choose(&mut rng).expect("below is non-empty");
+                let &(row_b, label_b) = at_or_above
+                    .choose(&mut rng)
+                    .expect("at_or_above is non-empty");
+                Pair {
+                    row_a,
+                    row_b,
+                    label_a,
+                    label_b,
+                    pair_label: None,
+                }
+            })
+            .collect();
+        self.interpolate(x, &pairs)
+    }
+
     fn rng(&self) -> StdRng {
         match self.config.random_state {
             Some(seed) => StdRng::seed_from_u64(seed),
@@ -402,6 +464,53 @@ mod tests {
             assert_eq!(a_f1.get(i), b_f1.get(i));
         }
         Ok(())
+    }
+
+    fn regression_config(seed: u64) -> FlipperConfig {
+        FlipperConfig {
+            n_pairs: 30,
+            n_steps: 4,
+            flip_threshold: 6.5,
+            positive_class_label: None,
+            random_state: Some(seed),
+        }
+    }
+
+    #[test]
+    fn regression_pairs_straddle_the_cutoff() -> Result<(), CoreError> {
+        let (x, _) = sample_df();
+        let y = Series::new("hba1c".into(), &[5.0, 5.5, 6.0, 6.4, 6.5, 7.0, 8.0, 9.0]);
+        let sim = FlipperSimulator::new(regression_config(3));
+        let grid = sim.generate_regression(&x, &y, 6.5)?;
+        assert_eq!(grid.height(), 30 * 4);
+        assert!(grid.column(PAIR_LABEL_COL).is_err());
+        let label_a = grid.column(LABEL_A_COL)?.f64()?;
+        let label_b = grid.column(LABEL_B_COL)?.f64()?;
+        let source_a = grid.column(SOURCE_A_ROW_COL)?.u32()?;
+        for i in 0..grid.height() {
+            let (a, b) = (label_a.get(i).unwrap(), label_b.get(i).unwrap());
+            assert!(a < 6.5 && b >= 6.5, "row {i}: {a} / {b}");
+            // label_a is the source row's own target.
+            let src = source_a.get(i).unwrap() as usize;
+            assert_eq!(y.f64()?.get(src), Some(a));
+        }
+
+        let again = sim.generate_regression(&x, &y, 6.5)?;
+        assert!(grid.equals(&again), "same seed must give the same grid");
+        Ok(())
+    }
+
+    #[test]
+    fn regression_needs_both_sides_of_the_cutoff() {
+        let (x, _) = sample_df();
+        let y = Series::new("t".into(), &[1.0f64; 8]);
+        let sim = FlipperSimulator::new(regression_config(1));
+        let err = sim
+            .generate_regression(&x, &y, 6.5)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("8 row(s) below it, 0 at or above"), "{err}");
+        assert!(sim.generate_regression(&x, &y, f64::NAN).is_err());
     }
 
     #[test]

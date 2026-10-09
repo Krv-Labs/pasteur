@@ -55,10 +55,11 @@ pub struct SimulationConfig {
     pub flipper: Option<FlipperConfig>,
 }
 
-/// What a model's probability output means. Binary models emit one
-/// positive-class column; multiclass models emit K mutually exclusive class
-/// probabilities (one row sums to 1); multilabel models emit K independent
-/// per-label probabilities.
+/// What a model's output means. Binary models emit one positive-class
+/// column; multiclass models emit K mutually exclusive class probabilities
+/// (one row sums to 1); multilabel models emit K independent per-label
+/// probabilities; regression models emit one predicted value, in the
+/// target's units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskType {
@@ -66,6 +67,7 @@ pub enum TaskType {
     Binary,
     Multiclass,
     Multilabel,
+    Regression,
 }
 
 impl TaskType {
@@ -80,13 +82,15 @@ impl std::fmt::Display for TaskType {
             TaskType::Binary => "binary",
             TaskType::Multiclass => "multiclass",
             TaskType::Multilabel => "multilabel",
+            TaskType::Regression => "regression",
         })
     }
 }
 
 /// `y` is a label matrix with one 0/1 column per model output column, in the
 /// model's class order: one column for binary, a one-hot row for multiclass,
-/// a multi-hot row for multilabel.
+/// a multi-hot row for multilabel. For regression it is one column holding
+/// the true target value.
 #[derive(Debug, Clone)]
 pub struct SimulationVariant {
     pub x: DataFrame,
@@ -103,6 +107,7 @@ pub struct EvaluationConfig {
     /// Probability threshold for flipper stability (decision-boundary crossing).
     /// For multilabel models without per-label `output.thresholds`, applies
     /// to every label. Unused for multiclass, whose decision is the argmax.
+    /// For regression it is a clinical cutoff in the target's units.
     pub flip_threshold: f64,
     #[serde(default)]
     pub task: TaskType,
@@ -136,6 +141,31 @@ pub struct EvaluationResult {
     /// Absent for binary models, so binary output is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi: Option<MultiOutputScores>,
+    /// Regression detail, in the target's units. Absent for classifiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regression: Option<RegressionScores>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegressionScores {
+    /// Name of the target column.
+    pub target: String,
+    pub n_rows: usize,
+    /// Standard deviation of the true target on the clean cohort. Jitter
+    /// stability is scaled by its square, so it reads the same in any unit.
+    pub target_sd: f64,
+    /// RMSE on the blackout variant.
+    pub blackout_rmse: Option<f64>,
+    /// R² on the blackout variant; `metric_based.r2.resiliency` is this
+    /// divided by `baselines.r2`.
+    pub blackout_r2: Option<f64>,
+    /// Mean per-patient standard deviation of the prediction across jitter
+    /// draws, in target units. `None` with fewer than two draws.
+    pub jitter_prediction_sd: Option<f64>,
+    /// The cutoff flipper pairs were scored against, when flipper ran.
+    pub flip_threshold: Option<f64>,
+    /// Share of flipper pairs whose prediction never crossed the cutoff.
+    pub flipper_never_flipped: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

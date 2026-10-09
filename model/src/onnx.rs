@@ -9,7 +9,7 @@ use polars::prelude::*;
 use std::path::Path;
 use std::sync::Mutex;
 
-pub use crate::contract::{BINARY_OUTPUT_COLUMN, CONTRACT_FILENAME};
+pub use crate::contract::{BINARY_OUTPUT_COLUMN, CONTRACT_FILENAME, REGRESSION_OUTPUT_COLUMN};
 
 /// In-process ONNX Runtime model, loaded from a locally-cached (pulled) file.
 /// No HTTP server — this is a direct `Model` impl for scoring, per the
@@ -33,7 +33,8 @@ impl OnnxModel {
     /// blackout push patients toward the positive class.
     ///
     /// `positive_class_index` picks the scored column of a binary model
-    /// (default 1) and must be `None` for multiclass and multilabel models.
+    /// (default 1) and must be `None` for multiclass, multilabel and
+    /// regression models.
     pub fn from_file(
         path: &Path,
         input_name: impl Into<String>,
@@ -132,6 +133,8 @@ fn static_width(dtype: &ValueType) -> Option<usize> {
 }
 
 impl Model for OnnxModel {
+    /// For a regression model the one column is the predicted value, in the
+    /// target's units, not a probability.
     fn predict_proba(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
         let n_rows = df.height();
         let n_features = self.feature_order.len();
