@@ -153,7 +153,7 @@ Same flags as `evaluate`, except:
 - `--predictions-out` writes a local per-patient predictions parquet
 - A single `--contract` applies to every model
 
-**Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree` (all models on the same side of 0.5). Regression writes `target` instead of `label`, and `all_agree` compares sides of `--flip-threshold` (null without one).
+**Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree` (every model makes the same decision). Binary decisions are the side of a fixed 0.5. Multiclass and multilabel write `label__<class>` and `<model>__<class>` per class; their decisions are the argmax, or the set of labels at or over each threshold. Regression writes `target` instead of `label`, and `all_agree` compares sides of `--flip-threshold` (null without one).
 
 The `--output` directory must already exist.
 
