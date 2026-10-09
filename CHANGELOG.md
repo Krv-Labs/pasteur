@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.1
+
 ### Fixed
 
 - `JitterSimulator.transform` before `fit` now raises instead of returning the
