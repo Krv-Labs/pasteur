@@ -272,7 +272,7 @@ impl Evaluator {
 fn baseline_keys(task: TaskType) -> (&'static str, &'static [&'static str]) {
     match task {
         TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => ("roc_auc", &["roc_auc"]),
-        TaskType::Regression => ("rmse", &regression::BASELINE_KEYS),
+        TaskType::Regression => ("r2", &regression::BASELINE_KEYS),
     }
 }
 

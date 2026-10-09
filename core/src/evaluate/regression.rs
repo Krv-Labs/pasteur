@@ -1,8 +1,8 @@
 //! Scoring for regression models: one predicted value per patient, compared
 //! against a continuous target. The headline fields keep their classifier
-//! meaning where one carries over (resiliency is "how much accuracy is kept
-//! under blackout"), and the `regression` section reports the same numbers in
-//! the target's units.
+//! meaning where one carries over (resiliency is "how much of the model's
+//! skill is kept under blackout"), and the `regression` section reports the
+//! same numbers in the target's units.
 
 use super::flipper::{score_flipper, FlipperScores};
 use super::metrics::series_to_f64;
@@ -45,6 +45,7 @@ pub(crate) fn score_dataset(
     let (_, mut clean_pred) = predict_named(model, &clean.x, 1)?;
     let clean_pred = clean_pred.swap_remove(0);
     let clean_rmse = rmse(&y, &clean_pred);
+    let clean_r2 = r2(&y, &clean_pred, target_variance);
 
     let blackout_rmse = variants
         .get("blackout")
@@ -52,6 +53,7 @@ pub(crate) fn score_dataset(
             Ok(rmse(&y, &predict_column(model, &blackout.x)?))
         })
         .transpose()?;
+    let blackout_r2 = blackout_rmse.map(|stressed| 1.0 - stressed.powi(2) / target_variance);
 
     let jitter_draws: Vec<Vec<f64>> = variants
         .iter()
@@ -74,18 +76,15 @@ pub(crate) fn score_dataset(
         .transpose()?;
 
     Ok(RegressionDataset {
-        baselines: [
-            clean_rmse,
-            mae(&y, &clean_pred),
-            r2(&y, &clean_pred, target_variance),
-        ],
-        resiliency: blackout_rmse.map(|stressed| rmse_resiliency(clean_rmse, stressed)),
+        baselines: [clean_rmse, mae(&y, &clean_pred), clean_r2],
+        resiliency: blackout_r2.and_then(|stressed| r2_resiliency(clean_r2, stressed)),
         jitter_variance: jitter.map(|j| j.variance / target_variance),
         detail: RegressionScores {
             target: target_name,
             n_rows: y.len(),
             target_sd: target_variance.sqrt(),
             blackout_rmse,
+            blackout_r2,
             jitter_prediction_sd: jitter.map(|j| j.sd),
             flip_threshold: flipper.as_ref().map(|_| flip_threshold),
             flipper_never_flipped: flipper.as_ref().map(|f| f.never_flipped),
@@ -137,15 +136,21 @@ pub(crate) fn r2(y: &[f64], pred: &[f64], target_variance: f64) -> f64 {
     1.0 - mse / target_variance
 }
 
-/// Clean RMSE ÷ blackout RMSE: 1.0 means blackout cost nothing, 0.5 means the
-/// error doubled. It exceeds 1.0 when blackout happens to help. A model with
-/// no error under blackout has lost nothing, so that case is 1.0.
-pub(crate) fn rmse_resiliency(clean: f64, stressed: f64) -> f64 {
-    if stressed == 0.0 {
-        1.0
-    } else {
-        clean / stressed
-    }
+/// Blackout R² ÷ clean R²: the share of the model's skill over predicting
+/// the cohort mean that survives blackout. 1.0 means blackout cost nothing,
+/// 0 means the model fell back to no better than the mean, and it is
+/// negative when blackout made the model worse than the mean. It exceeds 1.0
+/// when blackout happens to help.
+///
+/// A ratio of errors (clean RMSE ÷ blackout RMSE) would reward a model for
+/// having little accuracy to lose: its floor is `sqrt(1 − R²)`, so a weak
+/// model that collapses below the mean can outscore a strong one that keeps
+/// most of its skill.
+///
+/// `None` when the clean R² is not positive: a model with no skill has none
+/// to keep, just as a classifier label at chance has no resiliency.
+pub(crate) fn r2_resiliency(clean: f64, stressed: f64) -> Option<f64> {
+    (clean > 0.0).then(|| stressed / clean)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -202,6 +207,7 @@ pub(crate) fn average_regression(scores: Vec<RegressionScores>) -> Option<Regres
         n_rows: scores.iter().map(|s| s.n_rows).sum(),
         target_sd: avg(&|s| Some(s.target_sd)).unwrap_or(0.0),
         blackout_rmse: avg(&|s| s.blackout_rmse),
+        blackout_r2: avg(&|s| s.blackout_r2),
         jitter_prediction_sd: avg(&|s| s.jitter_prediction_sd),
         flip_threshold: first.flip_threshold,
         flipper_never_flipped: avg(&|s| s.flipper_never_flipped),
@@ -228,10 +234,28 @@ mod tests {
     }
 
     #[test]
-    fn resiliency_is_the_rmse_ratio() {
-        assert!(close(rmse_resiliency(1.0, 2.0), 0.5));
-        assert!(close(rmse_resiliency(2.0, 1.0), 2.0));
-        assert_eq!(rmse_resiliency(0.0, 0.0), 1.0);
+    fn resiliency_is_the_share_of_r2_kept() {
+        assert!(close(r2_resiliency(0.8, 0.4).unwrap(), 0.5));
+        assert!(close(r2_resiliency(0.4, 0.8).unwrap(), 2.0));
+        // Worse than predicting the mean under blackout: negative.
+        assert!(r2_resiliency(0.3, -0.1).unwrap() < 0.0);
+        // No skill to keep.
+        assert_eq!(r2_resiliency(0.0, -0.5), None);
+        assert_eq!(r2_resiliency(-0.2, -0.2), None);
+    }
+
+    #[test]
+    fn a_weak_model_that_collapses_does_not_outscore_a_strong_one() {
+        // Target variance 1. Strong: R² 0.66 → 0.27. Weak: R² 0.26 → −0.09.
+        // The RMSE ratio ranks the weak model as more resilient (0.82 vs
+        // 0.69); the R² ratio does not.
+        let rmse_of = |r2: f64| (1.0 - r2).sqrt();
+        let strong = (0.66, 0.27);
+        let weak = (0.26, -0.09);
+        assert!(rmse_of(weak.0) / rmse_of(weak.1) > rmse_of(strong.0) / rmse_of(strong.1));
+        assert!(
+            r2_resiliency(weak.0, weak.1).unwrap() < r2_resiliency(strong.0, strong.1).unwrap()
+        );
     }
 
     #[test]

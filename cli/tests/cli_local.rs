@@ -705,13 +705,16 @@ fn regression_simulate_evaluate_and_compare() {
             result["baselines"]["r2"].as_f64().unwrap() > 0.9,
             "{result}"
         );
-        assert!(result["evaluations"]["metric_based"]["rmse"]["resiliency"].is_number());
+        assert!(result["evaluations"]["metric_based"]["r2"]["resiliency"].is_number());
         assert!(result.get("multi").is_none());
         let detail = &result["regression"];
         assert_eq!(detail["target"], "hba1c");
         assert_eq!(detail["n_rows"], 12);
         match sim_type {
-            "blackout" => assert!(detail["blackout_rmse"].is_number()),
+            "blackout" => {
+                assert!(detail["blackout_rmse"].is_number());
+                assert!(detail["blackout_r2"].is_number());
+            }
             "jitter" => assert!(detail["jitter_prediction_sd"].is_number()),
             _ => {
                 assert_eq!(detail["flip_threshold"], 5.5);

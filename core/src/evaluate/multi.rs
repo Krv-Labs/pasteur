@@ -119,7 +119,10 @@ pub(crate) fn label_resiliency(
 /// times more stable for every extra class.
 pub(crate) fn headline_jitter_variance(task: TaskType, per_column: &[Option<f64>]) -> Option<f64> {
     match task {
-        TaskType::Binary | TaskType::Multilabel => mean_some(per_column.iter().copied()),
+        // Regression scores its one column in `regression`; it never gets here.
+        TaskType::Binary | TaskType::Multilabel | TaskType::Regression => {
+            mean_some(per_column.iter().copied())
+        }
         TaskType::Multiclass => per_column
             .iter()
             .copied()

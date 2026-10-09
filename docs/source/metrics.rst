@@ -202,10 +202,15 @@ with these fields:
        cohort. RMSE and MAE are in the target's units; lower is better. R² is
        1 for a perfect model, 0 for one no better than predicting the mean,
        and negative for one worse than that.
-   * - ``metric_based.rmse.resiliency``
-     - Clean RMSE ÷ blackout RMSE. 1.0 means blackout cost nothing; 0.5 means
-       the error doubled. It can exceed 1.0 when blackout happens to help,
-       which usually means the blacked-out feature was hurting the model.
+   * - ``metric_based.r2.resiliency``
+     - Blackout R² ÷ clean R²: the share of the model's skill over predicting
+       the cohort mean that survives blackout. 1.0 means blackout cost
+       nothing; 0 means the model fell back to no better than the mean;
+       negative means blackout made it worse than the mean. It can exceed
+       1.0 when blackout happens to help, which usually means the
+       blacked-out feature was hurting the model. A model whose clean R² is
+       0 or below has no skill to keep and is reported at the neutral 1.0;
+       read ``baselines.r2`` first.
    * - ``metric_invariant.jitter_stability``
      - ``1 / (1 + 100 × v / var(target))``, where ``v`` is the per-patient
        variance of the prediction across jitter variants, averaged over
@@ -217,8 +222,17 @@ with these fields:
        (0 → 1) where the *prediction* first crosses the cutoff. Pairs that
        never cross count as 1.0.
 
+**Why an R² ratio and not an RMSE ratio.** An error ratio rewards a model
+for having little accuracy to lose. When a model loses a feature entirely and
+falls back to the mean, clean RMSE ÷ blackout RMSE is ``sqrt(1 − R²)``: about
+0.58 for a model with R² 0.66, but 0.86 for one with R² 0.26. On a synthetic
+HbA1c cohort with glucose blacked out for every patient, a 1-nearest-neighbour
+model dropped from R² 0.26 to −0.09 (worse than predicting the mean) and still
+had the best RMSE ratio, 0.82, of the models that used glucose. Its R² ratio
+is −0.35, the worst.
+
 The ``regression`` section reports the same behaviour in the target's units:
-``target_sd``, ``blackout_rmse``, ``jitter_prediction_sd`` (the mean
+``target_sd``, ``blackout_rmse``, ``blackout_r2``, ``jitter_prediction_sd`` (the mean
 per-patient standard deviation of the prediction across jitter draws),
 ``flip_threshold``, and ``flipper_never_flipped``. It is absent for
 classifiers.
@@ -232,7 +246,10 @@ straddle is rejected. Without a cutoff, ``simulate`` skips flipper.
 **Read ``flipper_never_flipped`` here too.** Pairs are chosen by their true
 targets, but crossings are read from predictions. A model whose predictions
 stay on one side of the cutoff for patients just above it never crosses, and
-those pairs count as 1.0.
+those pairs count as 1.0. Regression models shrink towards the mean, so when
+the cutoff sits in the tail of the target this is common: on a synthetic
+cohort with 8% of HbA1c values at or above 6.5%, 57–68% of pairs never
+crossed for well-fitted models, and those pairs dominate the mean.
 
 **Jitter depends on the cohort.** Because jitter is scaled by the target's
 variance in the clean cohort, compare jitter stability between models on the

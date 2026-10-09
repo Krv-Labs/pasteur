@@ -76,10 +76,10 @@ fn clean_baselines_are_rmse_mae_and_r2() {
     assert!(close(r.baselines["mae"], 0.625));
     assert!(close(r.baselines["r2"], 1.0 - 0.5625 / 1.25));
     assert_eq!(r.baselines.len(), 3);
-    assert!(r.evaluations.metric_based.contains_key("rmse"));
+    assert!(r.evaluations.metric_based.contains_key("r2"));
     assert!(!r.evaluations.metric_based.contains_key("roc_auc"));
     // Nothing simulated: neutral values, as for classifiers.
-    assert_eq!(r.evaluations.metric_based["rmse"].resiliency, 1.0);
+    assert_eq!(r.evaluations.metric_based["r2"].resiliency, 1.0);
     assert_eq!(r.evaluations.metric_invariant.jitter_stability, 1.0);
     assert!(r.evaluations.metric_invariant.flipper_stability.is_none());
 
@@ -91,18 +91,37 @@ fn clean_baselines_are_rmse_mae_and_r2() {
 }
 
 #[test]
-fn resiliency_is_clean_rmse_over_blackout_rmse() {
-    // Clean errors all 0.5 (RMSE 0.5); blackout errors all 2 (RMSE 2).
+fn resiliency_is_blackout_r2_over_clean_r2() {
+    // Var(target) = 1.25. Clean errors all 0.5: MSE 0.25, R² 0.8. Blackout
+    // errors all 1: MSE 1, R² 0.2. A quarter of the skill survives.
     let r = run(
         &PassThrough,
         variant(&[1.5, 2.5, 3.5, 4.5], &TARGET),
-        vec![("blackout", variant(&[3.0, 4.0, 5.0, 6.0], &TARGET))],
+        vec![("blackout", variant(&[2.0, 3.0, 4.0, 5.0], &TARGET))],
         TaskType::Regression,
         0.0,
     )
     .unwrap();
-    assert!(close(r.evaluations.metric_based["rmse"].resiliency, 0.25));
-    assert!(close(r.regression.unwrap().blackout_rmse.unwrap(), 2.0));
+    assert!(close(r.baselines["r2"], 0.8));
+    assert!(close(r.evaluations.metric_based["r2"].resiliency, 0.25));
+    let detail = r.regression.unwrap();
+    assert!(close(detail.blackout_rmse.unwrap(), 1.0));
+    assert!(close(detail.blackout_r2.unwrap(), 0.2));
+}
+
+#[test]
+fn a_model_with_no_skill_has_neutral_resiliency() {
+    // Predicting the target's mean (2.5) everywhere: R² 0, nothing to lose.
+    let r = run(
+        &PassThrough,
+        variant(&[2.5; 4], &TARGET),
+        vec![("blackout", variant(&[2.5; 4], &TARGET))],
+        TaskType::Regression,
+        0.0,
+    )
+    .unwrap();
+    assert!(close(r.baselines["r2"], 0.0));
+    assert_eq!(r.evaluations.metric_based["r2"].resiliency, 1.0);
 }
 
 #[test]

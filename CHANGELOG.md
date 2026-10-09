@@ -26,8 +26,8 @@
   `metadata.json` (default output `variable`, then `predictions`), and
   `--task regression` with true values from `--targets <parquet>
   --target-col <name>`, joined by ID as text. `baselines` are `rmse`, `mae`
-  and `r2`; resiliency is clean RMSE ÷ blackout RMSE under
-  `metric_based.rmse`; jitter variance is scaled by the target's variance.
+  and `r2`; resiliency is blackout R² ÷ clean R² (the share of skill kept)
+  under `metric_based.r2`; jitter variance is scaled by the target's variance.
   Flipper pairs patients across a clinical cutoff (`--flip-threshold`, in
   target units, passed to both `simulate` and `evaluate`) and finds where the
   prediction crosses it. A new `regression` section reports these in target

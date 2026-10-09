@@ -55,7 +55,7 @@ pub fn build_evaluation_inputs(
         allow_partial: true,
         metrics: vec![match task {
             TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => "roc_auc",
-            TaskType::Regression => "rmse",
+            TaskType::Regression => "r2",
         }
         .to_string()],
         flip_threshold,
