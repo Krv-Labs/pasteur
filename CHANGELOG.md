@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 ### Added
 
 - **Multiclass and multilabel models.** `metadata.json` gains `task_type`
