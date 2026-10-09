@@ -7,14 +7,16 @@ use super::Simulator;
 
 pub struct JitterSimulator {
     config: JitterConfig,
-    feature_std: f64,
+    /// Set by `fit`. `None` means unfitted, so `transform` refuses to run
+    /// instead of applying zero noise and reporting perfect stability.
+    feature_std: Option<f64>,
 }
 
 impl JitterSimulator {
     pub fn new(config: JitterConfig) -> Self {
         Self {
             config,
-            feature_std: 0.0,
+            feature_std: None,
         }
     }
 }
@@ -22,13 +24,19 @@ impl JitterSimulator {
 impl Simulator for JitterSimulator {
     fn fit(&mut self, df: &DataFrame) -> Result<(), CoreError> {
         let series = df.column(&self.config.feature)?;
-        self.feature_std = series.as_materialized_series().std(1).unwrap_or(0.0);
+        self.feature_std = Some(series.as_materialized_series().std(1).unwrap_or(0.0));
         Ok(())
     }
 
     fn transform(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
+        let Some(feature_std) = self.feature_std else {
+            return Err(CoreError::InvalidConfig(format!(
+                "JitterSimulator for `{}` must be fit before transform",
+                self.config.feature
+            )));
+        };
         let n_rows = df.height();
-        let scale = self.config.scale * self.feature_std;
+        let scale = self.config.scale * feature_std;
 
         // Deterministic per-row SHA256-seeded draw (see `stable_normal_sample`
         // in rng.rs) instead of a single shared RNG stream — matches jitter.py's
@@ -86,5 +94,20 @@ mod tests {
             // Noise actually got applied.
             assert_ne!(a.get(i), orig.get(i));
         }
+    }
+
+    #[test]
+    fn jitter_transform_before_fit_is_an_error() {
+        let df = df!["val" => [1.0, 2.0, 3.0]].unwrap();
+        let sim = JitterSimulator::new(JitterConfig {
+            feature: "val".to_string(),
+            scale: 1.0,
+            random_state: Some(0),
+        });
+        let err = sim.transform(&df).expect_err("unfitted jitter must fail");
+        assert!(
+            err.to_string().contains("must be fit before transform"),
+            "{err}"
+        );
     }
 }

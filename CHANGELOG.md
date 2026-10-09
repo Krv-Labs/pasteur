@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- `JitterSimulator.transform` before `fit` now raises instead of returning the
+  data unchanged, which would have scored as perfect jitter stability. This
+  affects the Rust `JitterSimulator` and `pypasteur.JitterSimulator`.
+- The `pasteur-model` README example passes `Some(1)` for the positive class
+  index, matching the 0.4.0 `Option<usize>` signature.
+- Positive-class-index errors from `OnnxModel::from_file` name the parameter
+  as well as the CLI flag.
+
+### Added
+
+- `pasteur-cli --version`.
+- `pypasteur.__version__`.
+
 ## 0.4.0
 
 ### Added

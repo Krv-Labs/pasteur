@@ -6,6 +6,7 @@ use pasteur_core::TaskType;
 #[derive(Parser)]
 #[command(
     name = "pasteur-cli",
+    version,
     about = "Local Pasteur simulation, evaluation, and dataset-card generation (no Hub I/O)"
 )]
 pub struct Cli {
