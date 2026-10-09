@@ -897,3 +897,17 @@ fn regression_targets_must_cover_the_cohort() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn version_flag_prints_crate_version() {
+    let out = Command::new(pasteur_cli())
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.trim(),
+        format!("pasteur-cli {}", env!("CARGO_PKG_VERSION"))
+    );
+}

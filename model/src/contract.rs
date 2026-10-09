@@ -128,8 +128,8 @@ fn resolve_binary_spec(
     if let Some(n) = classes.as_ref().map(Vec::len).or(width) {
         if positive_class_index >= n {
             return Err(CoreError::InvalidConfig(format!(
-                "--positive-class-index {positive_class_index} is out of range for a model \
-                 with {n} output columns"
+                "positive class index {positive_class_index} (--positive-class-index) is out \
+                 of range for a model with {n} output columns"
             )));
         }
     }
@@ -152,8 +152,8 @@ fn resolve_multi_spec(
 ) -> Result<OutputSpec, CoreError> {
     if positive_class_index.is_some() {
         return Err(CoreError::InvalidConfig(format!(
-            "--positive-class-index selects one column of a binary model; this is a {task} \
-             model and every column is scored"
+            "a positive class index (--positive-class-index) selects one column of a binary \
+             model; this is a {task} model and every column is scored"
         )));
     }
     let Some(classes) = classes.filter(|c| !c.is_empty()) else {
@@ -217,8 +217,8 @@ fn resolve_regression_spec(
     let invalid = |msg: String| Err(CoreError::InvalidConfig(msg));
     if positive_class_index.is_some() {
         return invalid(
-            "--positive-class-index selects one column of a binary model; a regression \
-             model has one output, its predicted value"
+            "a positive class index (--positive-class-index) selects one column of a binary \
+             model; a regression model has one output, its predicted value"
                 .to_string(),
         );
     }

@@ -9,7 +9,7 @@ let model = OnnxModel::from_file(
     "model.onnx".as_ref(),
     "input",                 // ONNX input name
     feature_order,           // Vec<String>, the column order fed to the model
-    1,                       // positive class index
+    Some(1),                 // positive class index: binary only (None → 1); None for other tasks
     None,                    // null fill: None → metadata.json absent_sentinel → NaN
     None,                    // contract path: None → {model_dir}/metadata.json
 )?;
