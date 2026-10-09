@@ -98,7 +98,7 @@ above hold macro averages; :doc:`metrics` defines each field.
 Multiclass results also carry ``flipper_detour_rate``.
 
 Regression results key ``baselines`` by ``rmse``, ``mae`` and ``r2``, key
-``metric_based`` by ``rmse``, and add a ``regression`` object in the target's
+``metric_based`` by ``r2``, and add a ``regression`` object in the target's
 units (see :doc:`metrics`):
 
 .. code-block:: json
@@ -108,6 +108,7 @@ units (see :doc:`metrics`):
      "n_rows": 300,
      "target_sd": 1.07,
      "blackout_rmse": 0.42,
+     "blackout_r2": 0.85,
      "jitter_prediction_sd": 0.05,
      "flip_threshold": 6.5,
      "flipper_never_flipped": 0.23

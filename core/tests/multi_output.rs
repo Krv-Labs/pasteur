@@ -206,8 +206,15 @@ fn multiclass_jitter_reports_argmax_flips() -> Result<(), CoreError> {
     )?;
     let multi = result.multi.unwrap();
     assert!(close(multi.decision_flip_rate.unwrap(), 1.0 / 6.0));
+    // Row 1 moves 0.3 of probability from c0 to c1: across the two draws each
+    // of those columns has variance 0.15² on that row, 0.0225 / 6 averaged
+    // over rows. The class variances are summed and halved (0.00375), not
+    // averaged over the three classes.
     let stability = result.evaluations.metric_invariant.jitter_stability;
-    assert!(stability < 1.0);
+    assert!(
+        close(stability, 1.0 / (1.0 + 100.0 * 0.00375)),
+        "{stability}"
+    );
     // c2 never moved.
     assert_eq!(multi.per_label[2].jitter_stability, 1.0);
     Ok(())

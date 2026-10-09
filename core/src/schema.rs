@@ -154,9 +154,11 @@ pub struct RegressionScores {
     /// Standard deviation of the true target on the clean cohort. Jitter
     /// stability is scaled by its square, so it reads the same in any unit.
     pub target_sd: f64,
-    /// RMSE on the blackout variant; `metric_based.rmse.resiliency` is clean
-    /// RMSE divided by this.
+    /// RMSE on the blackout variant.
     pub blackout_rmse: Option<f64>,
+    /// R² on the blackout variant; `metric_based.r2.resiliency` is this
+    /// divided by `baselines.r2`.
+    pub blackout_r2: Option<f64>,
     /// Mean per-patient standard deviation of the prediction across jitter
     /// draws, in target units. `None` with fewer than two draws.
     pub jitter_prediction_sd: Option<f64>,

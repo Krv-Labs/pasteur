@@ -16,6 +16,9 @@
   worst-label resiliency, a jitter decision-flip rate, the share of flipper
   pairs that never flip, the multiclass detour rate, labels excluded for
   having one class, and per-label scores. Binary output has no `multi` key.
+- Multiclass jitter stability sums the per-class prediction variances and
+  halves them, so it equals the binary score for 2 classes and does not
+  depend on how many classes the model has. Multilabel averages per label.
 - Multiclass flipper finds where the pairwise margin `p[b] − p[a]` crosses 0;
   multilabel flipper samples pairs per label (new `pair_label` grid column)
   and crosses each label's own threshold.
@@ -23,8 +26,8 @@
   `metadata.json` (default output `variable`, then `predictions`), and
   `--task regression` with true values from `--targets <parquet>
   --target-col <name>`, joined by ID as text. `baselines` are `rmse`, `mae`
-  and `r2`; resiliency is clean RMSE ÷ blackout RMSE under
-  `metric_based.rmse`; jitter variance is scaled by the target's variance.
+  and `r2`; resiliency is blackout R² ÷ clean R² (the share of skill kept)
+  under `metric_based.r2`; jitter variance is scaled by the target's variance.
   Flipper pairs patients across a clinical cutoff (`--flip-threshold`, in
   target units, passed to both `simulate` and `evaluate`) and finds where the
   prediction crosses it. A new `regression` section reports these in target
