@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- `metadata.json` `input.absent_sentinel` accepts the string `"nan"` (any
+  case), and any other string `f32` parses. JSON cannot write NaN as a
+  number, so contracts written for NaN-native models were rejected with
+  `invalid type: string "nan", expected f32`.
+
 ## 0.4.1
 
 ### Fixed

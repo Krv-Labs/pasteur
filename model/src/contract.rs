@@ -3,6 +3,7 @@
 //! output, and what each output column means.
 
 use pasteur_core::{CoreError, TaskType};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// Sidecar written next to the `.onnx` by whoever trained it, as
@@ -18,9 +19,33 @@ pub(crate) struct ContractInput {
     pub(crate) feature_order: Vec<String>,
     /// The value the model was *fit* with standing in for "absent". Overrides
     /// the NaN default, because reproducing the training encoding beats any
-    /// guess this crate could make.
-    #[serde(default)]
+    /// guess this crate could make. JSON has no NaN, so a NaN-native model's
+    /// exporter writes it as the string `"nan"`; that is accepted too.
+    #[serde(default, deserialize_with = "deserialize_sentinel")]
     pub(crate) absent_sentinel: Option<f32>,
+}
+
+/// A number, `null`, or a string `f32` parses: `"nan"`, `"NaN"`, `"inf"`,
+/// `"-1"`. Anything else is a contract error, not a silent NaN.
+fn deserialize_sentinel<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Sentinel {
+        Number(f32),
+        Text(String),
+    }
+    match Option::<Sentinel>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(Sentinel::Number(v)) => Ok(Some(v)),
+        Some(Sentinel::Text(s)) => s.trim().parse::<f32>().map(Some).map_err(|_| {
+            serde::de::Error::custom(format!(
+                "input.absent_sentinel must be a number, null, or \"nan\"; got {s:?}"
+            ))
+        }),
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -488,6 +513,45 @@ mod tests {
         let c = load_contract(&onnx, None).unwrap().unwrap();
         assert!(c.input.feature_order.is_empty());
         assert_eq!(c.input.absent_sentinel, None);
+
+        // JSON has no NaN literal; exporters of NaN-native models write a string.
+        for text in ["nan", "NaN", "NAN"] {
+            std::fs::write(
+                dir.join(CONTRACT_FILENAME),
+                format!(r#"{{"input": {{"absent_sentinel": "{text}"}}}}"#),
+            )
+            .unwrap();
+            let c = load_contract(&onnx, None).unwrap().unwrap();
+            assert!(c.input.absent_sentinel.unwrap().is_nan(), "{text}");
+        }
+        std::fs::write(
+            dir.join(CONTRACT_FILENAME),
+            r#"{"input": {"absent_sentinel": "-1"}}"#,
+        )
+        .unwrap();
+        let c = load_contract(&onnx, None).unwrap().unwrap();
+        assert_eq!(c.input.absent_sentinel, Some(-1.0));
+        std::fs::write(
+            dir.join(CONTRACT_FILENAME),
+            r#"{"input": {"absent_sentinel": null}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_contract(&onnx, None)
+                .unwrap()
+                .unwrap()
+                .input
+                .absent_sentinel,
+            None
+        );
+        // A typo must not quietly become "no sentinel".
+        std::fs::write(
+            dir.join(CONTRACT_FILENAME),
+            r#"{"input": {"absent_sentinel": "missing"}}"#,
+        )
+        .unwrap();
+        let err = load_contract(&onnx, None).unwrap_err().to_string();
+        assert!(err.contains("absent_sentinel"), "got {err}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

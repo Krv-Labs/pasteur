@@ -133,6 +133,9 @@ ONNX tensors preserve width and order, not clinical feature names. Place
 
 ``feature_order`` is compared element by element with the simulation data.
 ``absent_sentinel`` supplies the model-specific value used for missing inputs.
+It may be a number, ``null`` (use the default, NaN), or the string ``"nan"``
+for a model trained with NaN for missing values, since JSON cannot write NaN
+as a number.
 
 Multiclass and multilabel models must also declare what their outputs are:
 
