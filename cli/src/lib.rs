@@ -15,7 +15,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use args::Command;
-use commands::{run_cache, run_card, run_compare, run_evaluate, run_simulate};
+use commands::{run_cache, run_card, run_compare, run_doctor, run_evaluate, run_simulate};
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -25,6 +25,7 @@ pub fn run() -> Result<()> {
         Command::Evaluate(args) => run_evaluate(args),
         Command::Compare(args) => run_compare(args),
         Command::Cache(args) => run_cache(args),
+        Command::Doctor => run_doctor(),
     }
 }
 

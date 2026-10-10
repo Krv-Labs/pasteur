@@ -15,6 +15,18 @@ homepage.workspace = true
 [dependencies]
 pasteur-core = { workspace = true }
 polars = { version = "0.54.4", default-features = false, features = ["lazy", "dtype-full", "strings", "csv"] }
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "tls-rustls"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Probe ONNX Runtime candidates before handing one to ort (see src/runtime.rs).
+libloading = { version = "0.9", optional = true }
+
+[features]
+# Open ONNX Runtime as a shared library at run time (see `src/runtime.rs`).
+# Builds on any glibc; needs libonnxruntime >= 1.17 when a model is scored.
+default = ["load-dynamic"]
+load-dynamic = ["ort/load-dynamic", "dep:libloading"]
+# Link the archive `ort` downloads at build time instead: one self-contained
+# binary, but it needs glibc >= 2.38 and GCC 13's libstdc++ (Ubuntu 24.04,
+# Fedora 39, macOS). Build with `--no-default-features --features static-ort`.
+static-ort = ["ort/download-binaries", "ort/tls-rustls"]

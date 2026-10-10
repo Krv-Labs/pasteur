@@ -26,6 +26,8 @@ pub enum Command {
     Compare(CompareArgs),
     /// List, remove, or clear the local Pasteur staging cache.
     Cache(CacheArgs),
+    /// Report which ONNX Runtime library `evaluate` and `compare` will load.
+    Doctor,
 }
 
 /// Mirrors `pasteur_core::TaskType` for clap.

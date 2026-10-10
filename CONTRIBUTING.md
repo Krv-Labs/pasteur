@@ -5,6 +5,7 @@ Thanks for helping improve Pasteur.
 ## Before you open a PR
 
 ```bash
+export ORT_DYLIB_PATH="$(scripts/fetch-onnxruntime.sh)"   # once: tests load ONNX Runtime
 cargo fmt --all
 cargo clippy --workspace --locked -- -D warnings
 cargo test --workspace --locked --exclude pypasteur-bindings

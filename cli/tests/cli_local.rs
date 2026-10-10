@@ -971,3 +971,71 @@ fn version_flag_prints_crate_version() {
         format!("pasteur-cli {}", env!("CARGO_PKG_VERSION"))
     );
 }
+
+#[cfg(feature = "load-dynamic")]
+#[test]
+fn missing_onnx_runtime_is_an_error_not_a_panic() {
+    let root = temp_dir("missing-ort");
+    let groups = ["1", "2", "3"];
+    let (sim_root, labels) = simulate_multi(&root, "multiclass", &groups);
+    let model = fixture_model(
+        &root.join("models"),
+        "multiclass_tensor",
+        "multiclass",
+        &["low", "mid", "high"],
+    );
+    let missing = root.join("nowhere/libonnxruntime.so");
+
+    let mut args = vec![
+        "evaluate",
+        "flipper",
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+        "--task",
+        "multiclass",
+    ];
+    for g in groups {
+        args.extend(["--positive-group-id", g]);
+    }
+    for cmd in [args, vec!["doctor"]] {
+        let out = Command::new(pasteur_cli())
+            .args(&cmd)
+            .env("ORT_DYLIB_PATH", &missing)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{}: {stderr}", cmd[0]);
+        assert!(!stderr.contains("panicked"), "{}: {stderr}", cmd[0]);
+        assert!(
+            stderr.contains(&format!(
+                "ORT_DYLIB_PATH={} did not load",
+                missing.display()
+            )),
+            "{}: {stderr}",
+            cmd[0]
+        );
+        assert!(
+            stderr.contains("github.com/microsoft/onnxruntime/releases"),
+            "{}: {stderr}",
+            cmd[0]
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn doctor_reports_the_loaded_runtime() {
+    let out = run_cli(&["doctor"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "doctor failed (is ORT_DYLIB_PATH set?): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("onnx runtime: "), "{stdout}");
+    assert!(stdout.contains("ORT Build Info"), "{stdout}");
+}

@@ -70,6 +70,7 @@ Build from source
    git clone https://github.com/Krv-Labs/pasteur.git
    cd pasteur
    cargo build -p pasteur-cli
+   export ORT_DYLIB_PATH="$(scripts/fetch-onnxruntime.sh)"
    cargo test --workspace --locked --exclude pypasteur-bindings
 
 The executable is written to ``target/debug/pasteur-cli``.
@@ -77,9 +78,43 @@ The executable is written to ``target/debug/pasteur-cli``.
 ONNX Runtime
 ------------
 
-The ``ort`` crate downloads ONNX Runtime at build time. Once built,
-``pasteur-cli`` performs simulation and evaluation without opening network
-connections. For machines without internet access, see
+``evaluate`` and ``compare`` score models with ONNX Runtime 1.17 or newer,
+which ``pasteur-cli`` opens as a shared library at run time rather than
+linking at build time. That is what lets it build and run on Ubuntu 22.04,
+Debian 12, and RHEL 8 and 9: Microsoft's release builds need only glibc 2.27.
+``simulate`` and ``card`` do not need it.
+
+``pasteur-cli`` looks for the library in this order:
+
+1. ``ORT_DYLIB_PATH``, if set (and nowhere else if it does not load).
+2. ``lib/`` beside the directory holding the executable.
+3. The system library path (``LD_LIBRARY_PATH``, ``ldconfig``).
+
+To install one, download ``onnxruntime-<os>-<arch>-<version>.tgz`` from
+`ONNX Runtime releases <https://github.com/microsoft/onnxruntime/releases>`_
+and point at its library:
+
+.. code-block:: bash
+
+   tar -xzf onnxruntime-linux-x64-1.28.0.tgz
+   export ORT_DYLIB_PATH="$PWD/onnxruntime-linux-x64-1.28.0/lib/libonnxruntime.so"
+   pasteur-cli doctor
+
+``pasteur-cli doctor`` prints the library and version it loaded, or every
+place it looked and how to fix it. From a source checkout,
+``scripts/fetch-onnxruntime.sh`` downloads the pinned release, verifies its
+SHA-256, and prints the path.
+
+On hosts with glibc 2.38 or newer (Ubuntu 24.04, Fedora 39) or on macOS, you
+can instead link ONNX Runtime in at build time, which downloads it from
+``cdn.pyke.io``:
+
+.. code-block:: bash
+
+   cargo install pasteur-cli --no-default-features --features static-ort
+
+Once built, ``pasteur-cli`` performs simulation and evaluation without opening
+network connections. For machines without internet access, see
 :ref:`security:Offline installation`.
 
 Publishing is separate

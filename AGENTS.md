@@ -11,7 +11,10 @@
 
 Git worktrees must not share a `CARGO_TARGET_DIR`: Cargo hashes workspace crates the same way in each checkout, so a shared target dir silently mixes artifacts from different checkouts.
 
+`evaluate`, `compare`, and their tests load ONNX Runtime at run time; fetch the pinned release once per checkout:
+
 ```bash
+export ORT_DYLIB_PATH="$(scripts/fetch-onnxruntime.sh)"
 cargo fmt --all --check
 cargo clippy --workspace --locked -- -D warnings
 cargo test --workspace --locked --exclude pypasteur-bindings

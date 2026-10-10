@@ -90,9 +90,16 @@ on a host or container with outbound traffic denied.
 
 - ``pip install pypasteur`` downloads a pre-built wheel and ``polars`` from
   PyPI.
-- ``cargo install pasteur-cli`` downloads Rust crates from crates.io, and its
-  build downloads **ONNX Runtime 1.28.0** from ``cdn.pyke.io``. That archive
-  is checked against a SHA-256 digest pinned in the ``ort-sys`` crate.
+- ``cargo install pasteur-cli`` downloads Rust crates from crates.io. It does
+  not download ONNX Runtime; ``evaluate`` and ``compare`` load the library you
+  install (see :doc:`installation`), which ``pasteur-cli doctor`` reports by
+  path and version.
+- ``cargo install pasteur-cli --no-default-features --features static-ort``
+  instead downloads **ONNX Runtime 1.28.0** from ``cdn.pyke.io`` at build
+  time, checked against a SHA-256 digest pinned in the ``ort-sys`` crate.
+- ``scripts/fetch-onnxruntime.sh`` (source checkouts) downloads Microsoft's
+  ONNX Runtime release from GitHub and checks a SHA-256 digest pinned in the
+  script.
 
 Offline installation
 --------------------
@@ -112,10 +119,11 @@ Then, on the offline machine:
 
    python -m pip install --no-index --find-links ./wheels pypasteur
 
-**CLI**: build on a connected machine and copy the single
-``pasteur-cli`` executable, or, to build offline, vendor the crates with
-``cargo vendor`` and point the build at a local ONNX Runtime with
-``ORT_LIB_LOCATION=/path/to/onnxruntime``.
+**CLI**: build on a connected machine and copy the ``pasteur-cli``
+executable together with an ONNX Runtime release's ``lib/`` directory, then set
+``ORT_DYLIB_PATH`` on the offline machine (or place the executable in
+``bin/`` beside that ``lib/``). To build offline, vendor the crates with
+``cargo vendor``; the default build downloads nothing else.
 
 System requirements
 -------------------
@@ -131,7 +139,9 @@ System requirements
        x86_64/arm64, Windows x64.
    * - ``pasteur-cli``
      - Built from source with Rust 1.95 or newer on Linux, macOS, or
-       Windows.
+       Windows. ``evaluate`` and ``compare`` need ONNX Runtime 1.17 or newer
+       at run time; Microsoft's Linux builds run on glibc 2.27 or newer
+       (Ubuntu 18.04, Debian 10, RHEL 8).
    * - Memory
      - The cohort and every simulation variant are held in memory. Budget a
        few times the size of your input parquet.

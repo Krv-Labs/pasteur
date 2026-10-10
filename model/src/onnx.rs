@@ -43,6 +43,7 @@ impl OnnxModel {
         null_fill: Option<f32>,
         contract: Option<&Path>,
     ) -> Result<Self, CoreError> {
+        crate::runtime::ensure()?;
         let input_name = input_name.into();
         let contract_path = resolve_contract_path(path, contract);
         let contract_label = contract_path

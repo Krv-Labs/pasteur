@@ -86,7 +86,7 @@ missing = blackout.transform(df)
 | [`model`](model/) (`pasteur-model`) | ONNX model loading and scoring |
 | [`bindings/python-bindings`](bindings/python-bindings/) (`pypasteur`) | PyO3 Python bindings |
 
-`pasteur-model` downloads ONNX Runtime at **build** time (the `ort` crate's `download-binaries`). At runtime, `pasteur-cli` never opens a network connection.
+`pasteur-cli` loads ONNX Runtime (>= 1.17) as a shared library when `evaluate` or `compare` scores a model, so it builds and runs on any glibc Linux, including Ubuntu 22.04 and RHEL 8. Point it at Microsoft's release build with `ORT_DYLIB_PATH`, or run `pasteur-cli doctor` to see what it finds. At runtime, `pasteur-cli` never opens a network connection.
 
 ## Development
 

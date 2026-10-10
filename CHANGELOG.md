@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Breaking
+
+- `pasteur-cli` loads ONNX Runtime (>= 1.17) as a shared library at run time
+  instead of linking the archive `ort` downloads at build time, which needs
+  glibc 2.38 and GCC 13's libstdc++ and so failed to link on Ubuntu 22.04,
+  Debian 12, and RHEL 8/9. `evaluate` and `compare` now need
+  `libonnxruntime` at run time: set `ORT_DYLIB_PATH`, put it in `lib/` beside
+  the executable's directory, or on the system library path. The old build is
+  `--no-default-features --features static-ort`.
+
+### Added
+
+- `pasteur-cli doctor` prints the ONNX Runtime library and version that
+  `evaluate` and `compare` will use, or where it looked and how to fix it.
+- `scripts/fetch-onnxruntime.sh` downloads a pinned, SHA-256-verified ONNX
+  Runtime release for development and CI.
+
+### Fixed
+
+- A missing or incompatible ONNX Runtime is an error naming the paths tried,
+  not a panic.
+
 ### Added
 
 - `simulate --blackout-feature` and `--jitter-feature` target blackout and

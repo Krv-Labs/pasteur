@@ -58,6 +58,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-test-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-test-${{ steps.rust.outputs.cachekey }}-
+      # ONNX Runtime is loaded at run time (pasteur-model `load-dynamic`).
+      - run: echo "ORT_DYLIB_PATH=$(scripts/fetch-onnxruntime.sh)" >> "$GITHUB_ENV"
       # Binding crates have no tests; skip them here and verify compile in `bindings`.
       - run: |
           cargo test --workspace --locked --exclude pypasteur-bindings
@@ -78,6 +80,8 @@ jobs:
           key: ${{ runner.os }}-cargo-bindings-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-bindings-${{ steps.rust.outputs.cachekey }}-
       - run: cargo check --workspace --locked
+      # The opt-in build that links ONNX Runtime at build time.
+      - run: cargo check -p pasteur-cli --locked --no-default-features --features static-ort
 
   python:
     name: python
