@@ -128,9 +128,20 @@ pub struct SimulateArgs {
     pub dataset_name: Option<String>,
     #[arg(long, default_value = "node_id")]
     pub id_col: String,
+    /// Feature blackout and jitter perturb, unless --blackout-feature or
+    /// --jitter-feature names a different one for that simulator.
     #[arg(long, default_value = "TSH")]
     pub feature: String,
-    /// Column nulled together with --feature during blackout (repeatable),
+    /// Feature blackout nulls, when it differs from jitter's (default:
+    /// --feature). E.g. black out a panel that is often not drawn while
+    /// jittering an assay that always is.
+    #[arg(long)]
+    pub blackout_feature: Option<String>,
+    /// Feature jitter perturbs, when it differs from blackout's (default:
+    /// --feature).
+    #[arg(long)]
+    pub jitter_feature: Option<String>,
+    /// Column nulled together with the blackout feature (repeatable),
     /// e.g. `--blackout-companion TSH_measured`. Without it a blacked-out
     /// assay keeps claiming it was observed.
     #[arg(long = "blackout-companion")]
@@ -169,6 +180,16 @@ pub struct SimulateArgs {
     pub flipper_steps: usize,
     #[arg(long, default_value = "output")]
     pub output: PathBuf,
+}
+
+impl SimulateArgs {
+    pub fn blackout_feature(&self) -> &str {
+        self.blackout_feature.as_deref().unwrap_or(&self.feature)
+    }
+
+    pub fn jitter_feature(&self) -> &str {
+        self.jitter_feature.as_deref().unwrap_or(&self.feature)
+    }
 }
 
 #[derive(clap::Args)]

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- `simulate --blackout-feature` and `--jitter-feature` target blackout and
+  jitter at different columns in one run (e.g. black out FT4, which is often
+  not drawn, while jittering TSH, which always is). Both default to
+  `--feature`, so existing commands are unchanged.
+
 ### Fixed
 
 - `metadata.json` `input.absent_sentinel` accepts the string `"nan"` (any

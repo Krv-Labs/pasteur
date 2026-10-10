@@ -127,6 +127,66 @@ fn blackout_companion_is_nulled_with_the_feature() {
 }
 
 #[test]
+fn blackout_and_jitter_can_target_different_features() {
+    let root = temp_dir("per-simulator-features");
+    let input = root.join("clean.parquet");
+    let output = root.join("output");
+    write_clean_input(&input);
+
+    let status = Command::new(pasteur_cli())
+        .args([
+            "simulate",
+            "--input",
+            input.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--blackout-feature",
+            "f2",
+            "--jitter-feature",
+            "TSH",
+            "--blackout-rate",
+            "0.6",
+            "--jitter-iters",
+            "1",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let read = |rel: &str| {
+        ParquetReader::new(fs::File::open(output.join(rel)).unwrap())
+            .finish()
+            .unwrap()
+    };
+    let clean = read("clean/clean.parquet");
+    let blackout = read("blackout/blackout.parquet");
+    let jitter = read("jitter/jitter_0.parquet");
+    let null_count = |df: &DataFrame, name: &str| df.column(name).unwrap().null_count();
+
+    assert!(null_count(&blackout, "f2") > 0, "blackout must null f2");
+    assert_eq!(
+        null_count(&blackout, "TSH"),
+        0,
+        "blackout must leave TSH alone"
+    );
+    assert!(
+        !clean
+            .column("TSH")
+            .unwrap()
+            .equals(jitter.column("TSH").unwrap()),
+        "jitter must perturb TSH"
+    );
+    assert!(
+        clean
+            .column("f2")
+            .unwrap()
+            .equals(jitter.column("f2").unwrap()),
+        "jitter must leave f2 alone"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn card_writes_readme() {
     let root = temp_dir("card");
     let input = root.join("bundle");

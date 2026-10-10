@@ -42,9 +42,15 @@ Important options:
    * - ``--feature``
      - ``TSH``
      - Feature targeted by blackout and jitter
+   * - ``--blackout-feature``
+     - ``--feature``
+     - Feature blackout nulls, when it differs from jitter's
+   * - ``--jitter-feature``
+     - ``--feature``
+     - Feature jitter perturbs, when it differs from blackout's
    * - ``--blackout-companion``
      - none
-     - Repeatable column nulled with the target feature
+     - Repeatable column nulled with the blackout feature
    * - ``--blackout-rate``
      - ``0.1``
      - Fraction of rows selected for blackout

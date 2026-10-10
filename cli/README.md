@@ -55,7 +55,9 @@ pasteur-cli simulate \
 | `--dataset-name` | — | Provenance label for logs |
 | `--id-col` | `node_id` | Row id column (becomes `source_row_id`) |
 | `--feature` | `TSH` | Feature for blackout/jitter |
-| `--blackout-companion` | — | Column nulled together with `--feature` (repeatable). Without it a blacked-out assay keeps its `_measured == 1` flag — a row no EHR emits |
+| `--blackout-feature` | `--feature` | Feature blackout nulls, when it differs from jitter's |
+| `--jitter-feature` | `--feature` | Feature jitter perturbs, when it differs from blackout's |
+| `--blackout-companion` | — | Column nulled together with the blackout feature (repeatable). Without it a blacked-out assay keeps its `_measured == 1` flag — a row no EHR emits |
 | `--blackout-rate` | `0.1` | Blackout mask rate |
 | `--jitter-scale` | `1.0` | Jitter noise scale |
 | `--jitter-iters` | `3` | Number of `jitter_<i>` variants |

@@ -78,7 +78,7 @@ fn run_blackout(
     row_ordinal: &Column,
 ) -> Result<()> {
     let cfg = BlackoutConfig {
-        feature: args.feature.clone(),
+        feature: args.blackout_feature().to_string(),
         companions: args.blackout_companions.clone(),
         rate: args.blackout_rate,
         window_frac: 0.0,
@@ -105,7 +105,7 @@ fn run_jitter_iters(
 ) -> Result<()> {
     for i in 0..args.jitter_iters {
         let cfg = JitterConfig {
-            feature: args.feature.clone(),
+            feature: args.jitter_feature().to_string(),
             scale: args.jitter_scale,
             random_state: Some(args.random_state + i as u64),
         };
