@@ -144,6 +144,15 @@ pub struct EvaluationResult {
     /// Regression detail, in the target's units. Absent for classifiers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression: Option<RegressionScores>,
+    /// Reserved for metrics scored against per-row oracle labels. Always
+    /// `None` for now, so the output is unchanged.
+    // ponytail: untyped slot so parallel branches don't collide here; the
+    // branch that fills it gives it a real type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle: Option<serde_json::Value>,
+    /// Reserved for single-feature sweep metrics. Always `None` for now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

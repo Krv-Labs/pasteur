@@ -1,5 +1,6 @@
 use anyhow::Result;
 use pasteur_core::{Model, SimulationVariant, TaskType};
+use pasteur_hf::layout;
 use pasteur_model::OnnxModel;
 use polars::prelude::*;
 
@@ -115,8 +116,8 @@ fn assemble_dataframe(
         }
     };
     let mut columns: Vec<Column> = vec![
-        Series::new("source_row_id".into(), rows.source_row_id).into(),
-        Series::new("variant_name".into(), rows.variant_name).into(),
+        Series::new(layout::SOURCE_ROW_ID_COL.into(), rows.source_row_id).into(),
+        Series::new(layout::VARIANT_NAME_COL.into(), rows.variant_name).into(),
     ];
     for (class, labels) in rows.classes.iter().zip(rows.labels) {
         columns.push(label_column(rows.task, &suffix("label", class), labels).into());

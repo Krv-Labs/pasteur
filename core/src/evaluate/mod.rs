@@ -168,6 +168,8 @@ impl Evaluator {
             created_at: Utc::now(),
             multi,
             regression,
+            oracle: None,
+            sweep: None,
         })
     }
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- Every evaluation `x` frame in `evaluate` and `compare` now carries the row
+  key `(variant_name, source_row_id)`, so a `Model` can tell which row it is
+  scoring. ONNX models still read only their `feature_order`, and their
+  output is unchanged. A bundle with a feature named `variant_name` is
+  refused, because that name is reserved for the key.
+
 ## 0.4.1
 
 ### Fixed

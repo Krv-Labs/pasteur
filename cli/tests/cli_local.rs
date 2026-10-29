@@ -911,3 +911,206 @@ fn version_flag_prints_crate_version() {
         format!("pasteur-cli {}", env!("CARGO_PKG_VERSION"))
     );
 }
+
+/// ONNX `evaluate` and `compare` output on the fixtures, checked against
+/// goldens under `tests/golden/` so a change to how evaluation inputs are
+/// built cannot silently change ONNX scores. `created_at` is dropped and
+/// prediction rows are sorted by row key; HashMap iteration order would
+/// otherwise reorder them run to run. Regenerate with
+/// `PASTEUR_UPDATE_GOLDEN=1 cargo test -p pasteur-cli onnx_output_matches_golden`.
+#[test]
+fn onnx_output_matches_golden() {
+    let root = temp_dir("golden");
+    let golden_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/onnx_outputs.json");
+    let mut actual = serde_json::Map::new();
+
+    let classifiers: [(&str, &str, &[&str], &[&str]); 3] = [
+        ("binary", "binary_zipmap", &["0", "1"], &["1"]),
+        (
+            "multiclass",
+            "multiclass_tensor",
+            &["low", "mid", "high"],
+            &["1", "2", "3"],
+        ),
+        (
+            "multilabel",
+            "multilabel_multioutput",
+            &["a", "b", "c"],
+            &["11", "12", "1"],
+        ),
+    ];
+    for (task, fixture, classes, groups) in classifiers {
+        let dir = root.join(task);
+        fs::create_dir_all(&dir).unwrap();
+        let (sim_root, labels) = simulate_multi(&dir, task, groups);
+        let model_a = fixture_model(&dir.join("models"), fixture, task, classes);
+        let model_b = model_a.with_file_name(format!("{fixture}_copy.onnx"));
+        fs::copy(&model_a, &model_b).unwrap();
+        let mut base: Vec<String> = vec![
+            "--sim-root".into(),
+            sim_root.display().to_string(),
+            "--labels".into(),
+            labels.display().to_string(),
+            "--task".into(),
+            task.into(),
+        ];
+        for g in groups {
+            base.extend(["--positive-group-id".into(), g.to_string()]);
+        }
+        record_golden_runs(&mut actual, task, &dir, &base, &[&model_a, &model_b]);
+    }
+
+    let dir = root.join("regression");
+    fs::create_dir_all(&dir).unwrap();
+    let (sim_root, targets) = simulate_regression(&dir, Some("5.5"));
+    let linear = fixture_model(
+        &dir.join("linear"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+    let forest = fixture_model(
+        &dir.join("forest"),
+        "regression_forest",
+        "regression",
+        &["hba1c"],
+    );
+    let base: Vec<String> = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--targets",
+        targets.to_str().unwrap(),
+        "--target-col",
+        "hba1c",
+        "--task",
+        "regression",
+        "--flip-threshold",
+        "5.5",
+    ]
+    .map(String::from)
+    .to_vec();
+    record_golden_runs(&mut actual, "regression", &dir, &base, &[&linear, &forest]);
+
+    // Compared as text: parsing the golden back can move a float by one ULP.
+    let actual = serde_json::to_string_pretty(&serde_json::Value::Object(actual)).unwrap() + "\n";
+    if std::env::var_os("PASTEUR_UPDATE_GOLDEN").is_some() {
+        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
+        fs::write(&golden_path, actual).unwrap();
+    } else {
+        let expected = fs::read_to_string(&golden_path).unwrap();
+        let (a, e): (serde_json::Value, serde_json::Value) = (
+            serde_json::from_str(&actual).unwrap(),
+            serde_json::from_str(&expected).unwrap(),
+        );
+        for (key, value) in e.as_object().unwrap() {
+            let same =
+                serde_json::to_string(&a[key]).unwrap() == serde_json::to_string(value).unwrap();
+            assert!(same, "{key} differs from {}", golden_path.display());
+        }
+        assert!(
+            actual == expected,
+            "output differs from {}",
+            golden_path.display()
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Runs `evaluate` (first model) and `compare` (all models, with
+/// `--predictions-out`) for each sim type and records the normalised output.
+fn record_golden_runs(
+    out: &mut serde_json::Map<String, serde_json::Value>,
+    task: &str,
+    dir: &Path,
+    base: &[String],
+    models: &[&Path],
+) {
+    for sim_type in ["blackout", "jitter", "flipper"] {
+        let mut args: Vec<String> = vec!["evaluate".into(), sim_type.into()];
+        args.extend_from_slice(base);
+        args.extend(["--model".into(), models[0].display().to_string()]);
+        out.insert(
+            format!("{task}/evaluate/{sim_type}"),
+            golden_json(&run_golden_cli(&args)),
+        );
+
+        let predictions = dir.join(format!("predictions_{sim_type}.parquet"));
+        let mut args: Vec<String> = vec!["compare".into(), sim_type.into()];
+        args.extend_from_slice(base);
+        for model in models {
+            args.extend(["--model".into(), model.display().to_string()]);
+        }
+        let comparison = dir.join(format!("compare_{sim_type}.json"));
+        args.extend([
+            "--predictions-out".into(),
+            predictions.display().to_string(),
+            "--output".into(),
+            comparison.display().to_string(),
+        ]);
+        run_golden_cli(&args);
+        out.insert(
+            format!("{task}/compare/{sim_type}"),
+            golden_json(&fs::read(&comparison).unwrap()),
+        );
+        out.insert(
+            format!("{task}/predictions/{sim_type}"),
+            predictions_json(&predictions),
+        );
+    }
+}
+
+fn run_golden_cli(args: &[String]) -> Vec<u8> {
+    let out = Command::new(pasteur_cli()).args(args).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout
+}
+
+fn golden_json(stdout: &[u8]) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("created_at");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(stdout).unwrap();
+    strip(&mut value);
+    value
+}
+
+/// The predictions parquet as `{column: [values]}`, rows sorted by
+/// `(variant_name, source_row_id)`.
+fn predictions_json(path: &Path) -> serde_json::Value {
+    let df = ParquetReader::new(fs::File::open(path).unwrap())
+        .finish()
+        .unwrap()
+        .sort(["variant_name", "source_row_id"], Default::default())
+        .unwrap();
+    let mut columns = serde_json::Map::new();
+    for column in df.columns() {
+        let values: Vec<serde_json::Value> = match column.dtype() {
+            DataType::String => {
+                let ca = column.str().unwrap();
+                (0..df.height())
+                    .map(|i| serde_json::json!(ca.get(i)))
+                    .collect()
+            }
+            _ => {
+                let cast = column.cast(&DataType::Float64).unwrap();
+                let ca = cast.f64().unwrap();
+                (0..df.height())
+                    .map(|i| serde_json::json!(ca.get(i)))
+                    .collect()
+            }
+        };
+        columns.insert(column.name().to_string(), values.into());
+    }
+    columns.into()
+}
