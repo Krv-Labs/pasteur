@@ -1,6 +1,7 @@
 pub mod flipper;
 mod metrics;
 mod multi;
+pub mod oracle;
 mod regression;
 pub mod sweep;
 
@@ -12,6 +13,7 @@ pub use metrics::{
     calculate_jitter_stability, calculate_roc_auc, mean_jitter_variance, roc_auc,
     JITTER_STABILITY_ALPHA,
 };
+pub use oracle::{OracleConfig, OracleScores};
 pub use sweep::{score_sweep, sweep_scores, SweepScores};
 
 use crate::error::CoreError;
@@ -144,6 +146,9 @@ impl Evaluator {
             .collect();
         // ponytail: first dataset's sweep only; the CLI scores one dataset.
         let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
+        // ponytail: the CLI scores one dataset; with several, the first
+        // dataset's oracle scores stand for all. Average them if that changes.
+        let oracle = per_dataset_scores.iter_mut().find_map(|s| s.oracle.take());
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
             .into_iter()
             .map(|s| (s.multi, s.regression))
@@ -172,7 +177,7 @@ impl Evaluator {
             created_at: Utc::now(),
             multi,
             regression,
-            oracle: None,
+            oracle,
             sweep,
         })
     }
@@ -203,6 +208,7 @@ impl Evaluator {
                     multi: None,
                     regression: Some(scored.detail),
                     sweep: None,
+                    oracle: None,
                 })
             }
         }
@@ -252,6 +258,14 @@ impl Evaluator {
             .get("sweep")
             .map(|grid| score_sweep(model, &grid.x, task, k, &thresholds, None))
             .transpose()?;
+        let oracle = oracle::score_oracle(
+            model,
+            clean_dataset,
+            simulated_variants,
+            config,
+            &names,
+            &thresholds,
+        )?;
 
         let multi = (!task.is_binary()).then(|| {
             let labels = LabelBreakdown {
@@ -278,6 +292,7 @@ impl Evaluator {
             multi,
             regression: None,
             sweep,
+            oracle,
         })
     }
 }
@@ -300,4 +315,5 @@ struct SingleDatasetScores {
     multi: Option<MultiOutputScores>,
     regression: Option<RegressionScores>,
     sweep: Option<Vec<SweepScores>>,
+    oracle: Option<OracleScores>,
 }

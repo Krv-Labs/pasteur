@@ -52,6 +52,7 @@ fn config(task: TaskType) -> EvaluationConfig {
         metrics: vec!["roc_auc".to_string()],
         flip_threshold: 0.5,
         task,
+        oracle: None,
     }
 }
 

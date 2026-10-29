@@ -108,6 +108,23 @@ fn parse_predictions(value: &str) -> Result<PredictionsSource, String> {
     }
 }
 
+/// Per-row true labels for decision models, whose correct answer can change
+/// under a perturbation.
+#[derive(clap::Args)]
+pub struct OracleArgs {
+    /// Local parquet with the correct label for every simulated row: the row
+    /// key `source_row_id`, `variant_name` (as `compare --predictions-out`
+    /// writes it), and the label columns Pasteur derives from --labels
+    /// (`label` for binary, `group_<id>` per class or label). Replaces the
+    /// labels copied from the clean row and adds the `oracle` section.
+    #[arg(long)]
+    pub oracle_labels: Option<PathBuf>,
+    /// The model's output class meaning "cannot decide" (e.g.
+    /// `cannot_determine`). Adds blackout abstention metrics.
+    #[arg(long, requires = "oracle_labels")]
+    pub abstain_class: Option<String>,
+}
+
 #[derive(clap::Args)]
 pub struct CacheArgs {
     #[command(subcommand)]
@@ -312,6 +329,8 @@ pub struct EvaluateArgs {
     /// target's units, has no default, and must match `simulate`'s.
     #[arg(long)]
     pub flip_threshold: Option<f64>,
+    #[command(flatten)]
+    pub oracle: OracleArgs,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
@@ -365,6 +384,8 @@ pub struct CompareArgs {
     /// target's units, has no default, and must match `simulate`'s.
     #[arg(long)]
     pub flip_threshold: Option<f64>,
+    #[command(flatten)]
+    pub oracle: OracleArgs,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
     /// Local path for per-patient predictions parquet (agent uploads with `hf`).
