@@ -1114,3 +1114,347 @@ fn predictions_json(path: &Path) -> serde_json::Value {
     }
     columns.into()
 }
+
+/// `(variant_name, source_row_id, values of cols)` per row of a
+/// `--predictions-out` file.
+fn prediction_rows(path: &Path, cols: &[&str]) -> Vec<(String, String, Vec<f64>)> {
+    let df = ParquetReader::new(fs::File::open(path).unwrap())
+        .finish()
+        .unwrap();
+    let text = |name: &str| df.column(name).unwrap().str().unwrap().clone();
+    let (variant, id) = (text("variant_name"), text("source_row_id"));
+    let values: Vec<Float64Chunked> = cols
+        .iter()
+        .map(|c| df.column(c).unwrap().f64().unwrap().clone())
+        .collect();
+    (0..df.height())
+        .map(|i| {
+            (
+                variant.get(i).unwrap().to_string(),
+                id.get(i).unwrap().to_string(),
+                values.iter().map(|v| v.get(i).unwrap()).collect(),
+            )
+        })
+        .collect()
+}
+
+fn write_oracle(path: &Path, rows: &[(String, String, Vec<i64>)], label_cols: &[&str]) {
+    let mut columns: Vec<Column> = vec![
+        Series::new(
+            "variant_name".into(),
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+        Series::new(
+            "source_row_id".into(),
+            rows.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+    ];
+    for (j, name) in label_cols.iter().enumerate() {
+        let values: Vec<i64> = rows.iter().map(|r| r.2[j]).collect();
+        columns.push(Series::new((*name).into(), values).into());
+    }
+    let mut df = DataFrame::new(rows.len(), columns).unwrap();
+    ParquetWriter::new(&mut fs::File::create(path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+}
+
+/// Runs `args`, asserting success, and parses stdout as JSON.
+fn run_json(args: &[&str]) -> serde_json::Value {
+    let out = run_cli(args);
+    assert!(
+        out.status.success(),
+        "{args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// A two-feature binary bundle simulated with strong jitter and six flipper
+/// pairs, plus the fixture binary model.
+fn binary_oracle_bundle(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(&labels, &[(103, &[7, 8, 9, 10, 11, 12])]);
+    let out = run_cli(&[
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        sim_root.to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--labels",
+        labels.to_str().unwrap(),
+        "--jitter-iters",
+        "3",
+        "--jitter-scale",
+        "2.0",
+        "--flipper-pairs",
+        "6",
+        "--flipper-steps",
+        "9",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let model = fixture_model(&root.join("models"), "binary_zipmap", "binary", &["0", "1"]);
+    (sim_root, labels, model)
+}
+
+/// Per-row model probabilities for one simulation type, via `compare`.
+fn predictions_for(
+    root: &Path,
+    sim_type: &str,
+    common: &[&str],
+    cols: &[&str],
+) -> Vec<(String, String, Vec<f64>)> {
+    let path = root.join(format!("preds_{sim_type}.parquet"));
+    let mut args = vec!["compare", sim_type];
+    args.extend(common);
+    args.extend(["--predictions-out", path.to_str().unwrap()]);
+    let out = run_cli(&args);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    prediction_rows(&path, cols)
+}
+
+#[test]
+fn oracle_jitter_splits_flips_by_label_change() {
+    let root = temp_dir("oracle-jitter");
+    let (sim_root, labels, model) = binary_oracle_bundle(&root);
+    let common = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+    ];
+    let preds = predictions_for(&root, "jitter", &common, &["binary_zipmap"]);
+    let decide = |p: f64| i64::from(p >= 0.5);
+    let oracle = root.join("oracle.parquet");
+    let evaluate = |oracle: &Path| {
+        let mut args = vec!["evaluate", "jitter"];
+        args.extend(common);
+        args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+        run_json(&args)["oracle"].clone()
+    };
+
+    // The oracle agrees with every decision, so wherever jitter moved a
+    // decision the oracle moved too: the model always followed it.
+    let agree: Vec<_> = preds
+        .iter()
+        .map(|(v, id, p)| (v.clone(), id.clone(), vec![decide(p[0])]))
+        .collect();
+    write_oracle(&oracle, &agree, &["label"]);
+    let scores = evaluate(&oracle);
+    for (variant, acc) in scores["accuracy"].as_object().unwrap() {
+        assert_eq!(acc, 1.0, "{variant}");
+    }
+    let jitter = &scores["jitter"];
+    assert!(jitter["n_label_changed"].as_u64().unwrap() > 0, "{jitter}");
+    assert_eq!(jitter["flip_rate_label_changed"], 1.0);
+    assert_eq!(jitter["flip_rate_label_preserved"], 0.0);
+
+    // The oracle never changes its clean answer, so every decision jitter
+    // moved is a flip the label did not justify.
+    let clean: std::collections::HashMap<&str, i64> = preds
+        .iter()
+        .filter(|(v, _, _)| v == "clean")
+        .map(|(_, id, p)| (id.as_str(), decide(p[0])))
+        .collect();
+    let fixed: Vec<_> = preds
+        .iter()
+        .map(|(v, id, _)| (v.clone(), id.clone(), vec![clean[id.as_str()]]))
+        .collect();
+    write_oracle(&oracle, &fixed, &["label"]);
+    let draws: Vec<_> = preds.iter().filter(|(v, _, _)| v != "clean").collect();
+    let moved = draws
+        .iter()
+        .filter(|(_, id, p)| decide(p[0]) != clean[id.as_str()])
+        .count();
+    let jitter = evaluate(&oracle)["jitter"].clone();
+    assert_eq!(jitter["n_label_changed"], 0);
+    assert_eq!(jitter["n_label_preserved"], draws.len());
+    assert!(jitter["flip_rate_label_changed"].is_null());
+    let rate = jitter["flip_rate_label_preserved"].as_f64().unwrap();
+    assert!((rate - moved as f64 / draws.len() as f64).abs() < 1e-12);
+
+    // A row the oracle does not cover is an error, not a silent default.
+    write_oracle(&oracle, &fixed[1..], &["label"]);
+    let mut args = vec!["evaluate", "jitter"];
+    args.extend(common);
+    args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+    let out = run_cli(&args);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("miss 1 of"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn oracle_flipper_boundary_error() {
+    let root = temp_dir("oracle-flipper");
+    let (sim_root, labels, model) = binary_oracle_bundle(&root);
+    let common = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+    ];
+    let preds = predictions_for(&root, "flipper", &common, &["binary_zipmap"]);
+    // Nine steps, t = step / 8. The oracle turns positive at step 3, so it
+    // flips halfway between t = 2/8 and t = 3/8.
+    let rows: Vec<_> = preds
+        .iter()
+        .map(|(v, id, p)| {
+            let label = match id.rsplit_once("_step_") {
+                Some((_, step)) => i64::from(step.parse::<u32>().unwrap() >= 3),
+                None => i64::from(p[0] >= 0.5),
+            };
+            (v.clone(), id.clone(), vec![label])
+        })
+        .collect();
+    let oracle = root.join("oracle.parquet");
+    write_oracle(&oracle, &rows, &["label"]);
+    let mut args = vec!["evaluate", "flipper"];
+    args.extend(common);
+    args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+    let flipper = run_json(&args)["oracle"]["flipper"].clone();
+
+    // Each pair's model flip_t: where p crosses 0.5, interpolated between
+    // the bracketing steps.
+    let mut paths: std::collections::BTreeMap<&str, Vec<(u32, f64)>> = Default::default();
+    for (_, id, p) in preds.iter().filter(|(v, _, _)| v == "flipper") {
+        let (pair, step) = id.rsplit_once("_step_").unwrap();
+        paths
+            .entry(pair)
+            .or_default()
+            .push((step.parse().unwrap(), p[0]));
+    }
+    let mut errors: Vec<f64> = paths
+        .values_mut()
+        .filter_map(|path| {
+            path.sort_by_key(|(step, _)| *step);
+            path.windows(2).find_map(|w| {
+                let ((s0, p0), (_, p1)) = (w[0], w[1]);
+                ((p0 >= 0.5) != (p1 >= 0.5))
+                    .then(|| (s0 as f64 + (0.5 - p0) / (p1 - p0)) / 8.0 - 0.3125)
+            })
+        })
+        .collect();
+    errors.sort_by(f64::total_cmp);
+    assert!(!errors.is_empty(), "no pair flips: {flipper}");
+    let quantile = |q: f64| {
+        let pos = q * (errors.len() - 1) as f64;
+        let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
+        errors[lo] + (pos - lo as f64) * (errors[hi] - errors[lo])
+    };
+
+    assert_eq!(flipper["n_pairs"], paths.len());
+    assert_eq!(flipper["n_pairs_compared"], errors.len());
+    assert_eq!(flipper["oracle_never_flipped"], 0.0);
+    let median = flipper["boundary_error_median"].as_f64().unwrap();
+    assert!(
+        (median - quantile(0.5)).abs() < 1e-9,
+        "{median} vs {errors:?}"
+    );
+    let iqr = flipper["boundary_error_iqr"].as_f64().unwrap();
+    assert!((iqr - (quantile(0.75) - quantile(0.25))).abs() < 1e-9);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn oracle_multiclass_abstain_on_blackout() {
+    let root = temp_dir("oracle-abstain");
+    let groups = ["1", "2", "3"];
+    let (sim_root, labels) = simulate_multi(&root, "multiclass", &groups);
+    let model = fixture_model(
+        &root.join("models"),
+        "multiclass_tensor",
+        "multiclass",
+        &["low", "mid", "high"],
+    );
+    let mut common = vec![
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+        "--task",
+        "multiclass",
+    ];
+    for g in &groups {
+        common.extend(["--positive-group-id", g]);
+    }
+    let cols = [
+        "multiclass_tensor__low",
+        "multiclass_tensor__mid",
+        "multiclass_tensor__high",
+    ];
+    let preds = predictions_for(&root, "blackout", &common, &cols);
+    let argmax = |p: &[f64]| (0..3).max_by(|&a, &b| p[a].total_cmp(&p[b])).unwrap();
+    let one_hot = |c: usize| (0..3).map(|j| i64::from(j == c)).collect::<Vec<_>>();
+    // The oracle says "mid" (cannot decide) for odd-numbered blackout rows
+    // and agrees with the model everywhere else.
+    let oracle_class = |v: &str, id: &str, p: &[f64]| {
+        if v == "blackout" && id.parse::<u32>().unwrap() % 2 == 1 {
+            1
+        } else {
+            argmax(p)
+        }
+    };
+    let rows: Vec<_> = preds
+        .iter()
+        .map(|(v, id, p)| (v.clone(), id.clone(), one_hot(oracle_class(v, id, p))))
+        .collect();
+    let oracle = root.join("oracle.parquet");
+    write_oracle(&oracle, &rows, &["group_1", "group_2", "group_3"]);
+
+    let mut expected = [[0usize; 2]; 2]; // [oracle decided][model decided]
+    for (v, id, p) in preds.iter().filter(|(v, _, _)| v == "blackout") {
+        let oracle_decided = oracle_class(v, id, p) != 1;
+        expected[usize::from(oracle_decided)][usize::from(argmax(p) != 1)] += 1;
+    }
+
+    let mut args = vec!["evaluate", "blackout"];
+    args.extend(&common);
+    args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+    args.extend(["--abstain-class", "mid"]);
+    let abstain = run_json(&args)["oracle"]["abstain"].clone();
+    assert_eq!(abstain["class"], "mid");
+    let c = &abstain["confusion"];
+    assert_eq!(c["oracle_abstain_model_abstain"], expected[0][0]);
+    assert_eq!(c["oracle_abstain_model_decided"], expected[0][1]);
+    assert_eq!(c["oracle_decided_model_abstain"], expected[1][0]);
+    assert_eq!(c["oracle_decided_model_decided"], expected[1][1]);
+    let missing = (expected[0][0] + expected[0][1]) as f64;
+    assert!(missing > 0.0);
+    let share = abstain["abstain_when_missing"].as_f64().unwrap();
+    assert!((share - expected[0][0] as f64 / missing).abs() < 1e-12);
+    let decided = abstain["decided_when_missing"].as_f64().unwrap();
+    assert!((decided - expected[0][1] as f64 / missing).abs() < 1e-12);
+
+    // The abstain class must be one of the model's classes, and needs an oracle.
+    let last = args.len() - 1;
+    args[last] = "unsure";
+    let out = run_cli(&args);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not one of"));
+    let mut no_oracle = vec!["evaluate", "blackout"];
+    no_oracle.extend(&common);
+    no_oracle.extend(["--abstain-class", "mid"]);
+    assert!(!run_cli(&no_oracle).status.success());
+    let _ = fs::remove_dir_all(&root);
+}
