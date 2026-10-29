@@ -8,10 +8,11 @@ pub use compare::Comparer;
 pub use error::CoreError;
 pub use evaluate::{
     calculate_flipper_stability, find_flip_points, Evaluator, FlipperPairResult, FlipperScores,
-    Model,
+    Model, SweepScores,
 };
 pub use schema::*;
 pub use simulate::{
     flipper::{is_flipper_meta_column, FLIPPER_META_COLS, PAIR_ID_COL, PAIR_LABEL_COL, STEP_COL},
-    BlackoutSimulator, FlipperSimulator, JitterSimulator, Simulator,
+    sweep::{is_sweep_meta_column, SWEEP_META_COLS},
+    BlackoutSimulator, FlipperSimulator, JitterSimulator, Simulator, SweepSimulator,
 };

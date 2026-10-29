@@ -2,6 +2,7 @@ pub mod flipper;
 mod metrics;
 mod multi;
 mod regression;
+pub mod sweep;
 
 pub use flipper::{
     calculate_flipper_stability, find_flip_points, flipper_model_features, score_flipper,
@@ -11,6 +12,7 @@ pub use metrics::{
     calculate_jitter_stability, calculate_roc_auc, mean_jitter_variance, roc_auc,
     JITTER_STABILITY_ALPHA,
 };
+pub use sweep::{score_sweep, sweep_scores, SweepScores};
 
 use crate::error::CoreError;
 use crate::schema::{
@@ -140,6 +142,8 @@ impl Evaluator {
                 (key.to_string(), value)
             })
             .collect();
+        // ponytail: first dataset's sweep only; the CLI scores one dataset.
+        let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
             .into_iter()
             .map(|s| (s.multi, s.regression))
@@ -169,7 +173,7 @@ impl Evaluator {
             multi,
             regression,
             oracle: None,
-            sweep: None,
+            sweep,
         })
     }
 
@@ -198,6 +202,7 @@ impl Evaluator {
                     flipper_stability: scored.flipper.map(|f| f.stability),
                     multi: None,
                     regression: Some(scored.detail),
+                    sweep: None,
                 })
             }
         }
@@ -241,6 +246,13 @@ impl Evaluator {
             .map(|flipper| score_flipper(model, &flipper.x, task, k, &thresholds))
             .transpose()?;
 
+        // Oracle labels for grid rows arrive with `--oracle-labels`; until
+        // then sweep is scored descriptively.
+        let sweep = simulated_variants
+            .get("sweep")
+            .map(|grid| score_sweep(model, &grid.x, task, k, &thresholds, None))
+            .transpose()?;
+
         let multi = (!task.is_binary()).then(|| {
             let labels = LabelBreakdown {
                 names: &names,
@@ -265,6 +277,7 @@ impl Evaluator {
             flipper_stability: flipper.map(|f| f.stability),
             multi,
             regression: None,
+            sweep,
         })
     }
 }
@@ -286,4 +299,5 @@ struct SingleDatasetScores {
     flipper_stability: Option<f64>,
     multi: Option<MultiOutputScores>,
     regression: Option<RegressionScores>,
+    sweep: Option<Vec<SweepScores>>,
 }
