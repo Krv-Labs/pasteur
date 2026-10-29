@@ -103,8 +103,7 @@ struct Scored {
 /// Oracle metrics for one dataset, or `None` when the run is not
 /// oracle-labelled. `names` and `thresholds` are the model's output names and
 /// decision thresholds, as `score_classifier` uses them.
-// ponytail: predicts each variant again rather than threading the other
-// metrics' predictions through; fine for ONNX and lookups.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn score_oracle(
     model: &dyn Model,
     clean: &SimulationVariant,
@@ -112,6 +111,8 @@ pub(crate) fn score_oracle(
     config: &EvaluationConfig,
     names: &[String],
     thresholds: &[f64],
+    clean_probs: Option<&Columns>,
+    variant_probs: &HashMap<String, Columns>,
 ) -> Result<Option<OracleScores>, CoreError> {
     let Some(oracle) = &config.oracle else {
         return Ok(None);
@@ -122,20 +123,24 @@ pub(crate) fn score_oracle(
         .as_deref()
         .map(|class| abstain_index(task, names, class).map(|j| (class, j)))
         .transpose()?;
-    let score = |x: &DataFrame, y: &DataFrame| -> Result<Scored, CoreError> {
-        let y = label_matrix(y, task)?;
-        let probs = predict_matrix(model, x, names.len())?;
-        let decided = decisions(task, &probs, thresholds);
-        let truth = decisions(task, &y, &vec![0.5; y.len()]);
-        Ok(Scored {
-            probs,
-            y,
-            decided,
-            truth,
-        })
-    };
+    let score =
+        |x: &DataFrame, y: &DataFrame, cached: Option<&Columns>| -> Result<Scored, CoreError> {
+            let y = label_matrix(y, task)?;
+            let probs = match cached {
+                Some(p) => p.clone(),
+                None => predict_matrix(model, x, names.len())?,
+            };
+            let decided = decisions(task, &probs, thresholds);
+            let truth = decisions(task, &y, &vec![0.5; y.len()]);
+            Ok(Scored {
+                probs,
+                y,
+                decided,
+                truth,
+            })
+        };
 
-    let base = score(&clean.x, &clean.y)?;
+    let base = score(&clean.x, &clean.y, clean_probs)?;
     let mut accuracy = BTreeMap::from([("clean".to_string(), exact_match(&base))]);
     let mut jitter: Option<JitterTally> = None;
     let mut flipper = None;
@@ -147,7 +152,7 @@ pub(crate) fn score_oracle(
         } else {
             variant.x.clone()
         };
-        let scored = score(&x, &variant.y)?;
+        let scored = score(&x, &variant.y, variant_probs.get(name))?;
         accuracy.insert(name.clone(), exact_match(&scored));
         if name.starts_with("jitter") {
             jitter
@@ -368,6 +373,8 @@ mod tests {
             &config(true),
             &["proba".into()],
             &[0.5],
+            None,
+            &HashMap::new(),
         )
         .unwrap()
     }
@@ -382,6 +389,8 @@ mod tests {
             &config(false),
             &["proba".into()],
             &[0.5],
+            None,
+            &HashMap::new(),
         )
         .unwrap();
         assert!(out.is_none());
@@ -488,9 +497,18 @@ mod tests {
             abstain_class: Some("unknown".into()),
         });
         let variants = HashMap::from([("blackout".to_string(), blackout)]);
-        let s = score_oracle(&Three, &clean, &variants, &cfg, &names, &[0.5; 3])
-            .unwrap()
-            .unwrap();
+        let s = score_oracle(
+            &Three,
+            &clean,
+            &variants,
+            &cfg,
+            &names,
+            &[0.5; 3],
+            None,
+            &HashMap::new(),
+        )
+        .unwrap()
+        .unwrap();
         let a = s.abstain.unwrap();
         assert!((a.abstain_when_missing.unwrap() - 1.0 / 3.0).abs() < 1e-12);
         assert!((a.decided_when_missing.unwrap() - 2.0 / 3.0).abs() < 1e-12);
@@ -503,7 +521,17 @@ mod tests {
         cfg.oracle = Some(OracleConfig {
             abstain_class: Some("maybe".into()),
         });
-        let err = score_oracle(&Three, &clean, &variants, &cfg, &names, &[0.5; 3]).unwrap_err();
+        let err = score_oracle(
+            &Three,
+            &clean,
+            &variants,
+            &cfg,
+            &names,
+            &[0.5; 3],
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("not one of"), "{err}");
     }
 

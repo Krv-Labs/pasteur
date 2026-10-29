@@ -144,10 +144,9 @@ impl Evaluator {
                 (key.to_string(), value)
             })
             .collect();
-        // ponytail: first dataset's sweep only; the CLI scores one dataset.
+        // Per-feature sweep and oracle detail structs are reported for the
+        // first dataset with those evaluations (the CLI always scores one dataset).
         let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
-        // ponytail: the CLI scores one dataset; with several, the first
-        // dataset's oracle scores stand for all. Average them if that changes.
         let oracle = per_dataset_scores.iter_mut().find_map(|s| s.oracle.take());
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
             .into_iter()
@@ -232,19 +231,28 @@ impl Evaluator {
         // averages only the labels where AUC is defined.
         let baseline = mean_some(auc.iter().copied()).unwrap_or(0.5);
 
+        let mut variant_probs: HashMap<String, Columns> = HashMap::new();
         let resiliency = match simulated_variants.get("blackout") {
             Some(blackout) => {
-                let stressed = per_label_auc(&y, &predict_matrix(model, &blackout.x, k)?);
+                let p = predict_matrix(model, &blackout.x, k)?;
+                let stressed = per_label_auc(&y, &p);
+                variant_probs.insert("blackout".to_string(), p);
                 label_resiliency(task, &auc, &stressed)
             }
             None => vec![None; k],
         };
 
-        let jitter_draws: Vec<Columns> = simulated_variants
+        let mut jitter_draws: Vec<Columns> = Vec::new();
+        for (name, variant) in simulated_variants
             .iter()
             .filter(|(name, _)| name.starts_with("jitter"))
-            .map(|(_, variant)| predict_matrix(model, &variant.x, k))
-            .collect::<Result<_, _>>()?;
+        {
+            let p = predict_matrix(model, &variant.x, k)?;
+            if config.oracle.is_some() {
+                variant_probs.insert(name.clone(), p.clone());
+            }
+            jitter_draws.push(p);
+        }
         let jitter_variance = jitter_variances(&jitter_draws, k)?;
 
         let flipper = simulated_variants
@@ -268,6 +276,8 @@ impl Evaluator {
             config,
             &names,
             &thresholds,
+            Some(&probs),
+            &variant_probs,
         )?;
 
         let multi = (!task.is_binary()).then(|| {

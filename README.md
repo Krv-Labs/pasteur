@@ -5,6 +5,7 @@ Stress-test clinical AI models before you trust them. Pasteur simulates the ways
 - **Blackout**: a lab or feature goes missing, together with its companion columns
 - **Jitter**: measurement noise
 - **Flipper**: interpolation between patients with different labels, to find where a decision flips
+- **Sweep**: 1-D grid across a feature's clinical cutoff while holding every other feature fixed
 
 | | |
 |---|---|

@@ -16,8 +16,10 @@ Simulation bundle
    ├── jitter/
    │   ├── jitter_0.parquet
    │   └── jitter_1.parquet
-   └── flipper/
-       └── flipper.parquet
+   ├── flipper/
+   │   └── flipper.parquet
+   └── sweep/
+       └── sweep.parquet
 
 Every simulation parquet includes:
 
@@ -49,6 +51,14 @@ class indices in ``--positive-group-id`` order. For regression grids they are
 the two patients' true target values, one below the ``--flip-threshold``
 cutoff and one at or above it. Evaluation strips these metadata columns
 before model scoring.
+
+Sweep metadata
+--------------
+
+Sweep output (written when ``simulate`` receives ``--sweep-features``) also
+contains ``sweep_feature``, ``sweep_cutoff`` (nullable), ``sweep_path_id``,
+``sweep_step``, and ``sweep_value``. ``source_row_id`` is formatted as
+``sweep_{feature}_{path_id}_{step}``.
 
 Evaluation JSON
 ---------------
@@ -115,6 +125,12 @@ units (see :doc:`metrics`):
    }
 
 Fields for simulation types that were not loaded are ``null``.
+
+When ``--oracle-labels`` is supplied, ``EvaluationResult`` adds an ``oracle``
+object with per-variant exact-match ``accuracy`` and variant-specific
+``jitter``, ``flipper``, and ``abstain`` sections. Evaluating the ``sweep``
+simulation type adds a ``sweep`` array with one entry per swept feature. See
+:doc:`metrics` for field definitions.
 
 Comparison predictions
 ----------------------

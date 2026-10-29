@@ -12,13 +12,13 @@ description: Local Pasteur simulation and evaluation CLI (pasteur-cli) for binar
 | Goal | Command |
 |------|---------|
 | Download a dataset or model | `hf download ...` |
-| Simulate blackout/jitter/flipper | `pasteur-cli simulate --input <clean.parquet> --labels <groups.parquet> --output ./sim` |
-| Score one model | `pasteur-cli evaluate <sim_type> --sim-root ./sim --labels <groups.parquet> --model <model.onnx>` |
-| Score several models | `pasteur-cli compare <sim_type> --sim-root ./sim --labels ... --model a.onnx --model b.onnx [--predictions-out preds.parquet]` |
+| Simulate blackout/jitter/flipper/sweep | `pasteur-cli simulate --input <clean.parquet> --labels <groups.parquet> [--sweep-features <name:cutoff>] --output ./sim` |
+| Score one model or predictions table | `pasteur-cli evaluate <sim_type> --sim-root ./sim --labels <groups.parquet> (--model <model.onnx> \| --predictions <preds.parquet>)` |
+| Score several models / prediction tables | `pasteur-cli compare <sim_type> --sim-root ./sim --labels ... --model a.onnx --predictions rules=b.parquet [--predictions-out preds.parquet]` |
 | Write the dataset card | `pasteur-cli card --input ./sim --source-dataset <id> --dest-repo <id>` |
 | Publish a bundle | `hf repos create <id> --type dataset --private`, then `hf upload` |
 
-`<sim_type>` is `blackout`, `jitter`, or `flipper`. Flags and defaults: [cli/README.md](../../../cli/README.md).
+`<sim_type>` is `blackout`, `jitter`, `flipper`, or `sweep`. Pass `--oracle-labels <parquet>` instead of `--labels` when perturbations can change the true label. Flags and defaults: [cli/README.md](../../../cli/README.md).
 
 ## Task types
 
