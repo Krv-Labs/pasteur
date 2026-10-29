@@ -14,8 +14,8 @@
   `--sweep-steps` and `--sweep-near` writes `sweep/sweep.parquet`, and
   `evaluate sweep` reports `boundary_offset`, `monotonic_rate`,
   `never_flipped`, `extra_flips_rate` and `accuracy_by_step` per feature in a
-  new `sweep` section. Until oracle labels are supported, the section is
-  descriptive (`oracle: false`). Classifiers only.
+  new `sweep` section, scored against `--oracle-labels`. Without them the
+  section is descriptive (`oracle: false`). Classifiers only.
 - `--oracle-labels <parquet>` on `evaluate` and `compare`: per-row true
   labels keyed by `(variant_name, source_row_id)` replace the labels copied
   from the clean row, and a new `oracle` section scores the model's

@@ -1736,3 +1736,187 @@ fn oracle_multiclass_abstain_on_blackout() {
     assert!(!run_cli(&no_oracle).status.success());
     let _ = fs::remove_dir_all(&root);
 }
+
+/// `(variant_name, source_row_id, f1)` for every clean and sweep row.
+fn sweep_rows(sim_root: &Path) -> Vec<(String, String, f64)> {
+    ["clean", "sweep"]
+        .iter()
+        .flat_map(|variant| {
+            let path = sim_root.join(format!("{variant}/{variant}.parquet"));
+            let df = ParquetReader::new(fs::File::open(path).unwrap())
+                .finish()
+                .unwrap();
+            let ids = df.column("source_row_id").unwrap().str().unwrap().clone();
+            let f1 = df.column("f1").unwrap().f64().unwrap().clone();
+            (0..df.height())
+                .map(|i| {
+                    let (id, v) = (ids.get(i).unwrap(), f1.get(i).unwrap());
+                    (variant.to_string(), id.to_string(), v)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// A precomputed predictions file: the row key plus one Float64 column per
+/// `(name, value)` that `score` returns.
+fn write_scored(
+    path: &Path,
+    rows: &[(String, String, f64)],
+    names: &[&str],
+    score: impl Fn(f64) -> Vec<f64>,
+) {
+    let mut columns: Vec<Column> = vec![
+        Series::new(
+            "variant_name".into(),
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+        Series::new(
+            "source_row_id".into(),
+            rows.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+    ];
+    let scores: Vec<Vec<f64>> = rows.iter().map(|r| score(r.2)).collect();
+    for (j, name) in names.iter().enumerate() {
+        let values: Vec<f64> = scores.iter().map(|s| s[j]).collect();
+        columns.push(Series::new((*name).into(), values).into());
+    }
+    let mut df = DataFrame::new(rows.len(), columns).unwrap();
+    ParquetWriter::new(&mut fs::File::create(path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+}
+
+/// `simulate --sweep`, then precomputed predictions plus an oracle into
+/// `compare`: the sweep metrics must locate each model's boundary.
+#[test]
+fn sweep_scores_precomputed_predictions_against_the_oracle() {
+    let root = temp_dir("sweep-oracle");
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(
+        &labels,
+        &[
+            (103, &[7, 8, 9, 10, 11, 12]),
+            (1, &[1, 2, 3, 4]),
+            (2, &[5, 6, 7, 8]),
+            (3, &[9, 10, 11, 12]),
+        ],
+    );
+    // f1 = 1 is the cutoff; 41 steps over 0..2 put a grid point every 0.05.
+    #[rustfmt::skip]
+    let out = run_cli(&[
+        "simulate", "--input", input.to_str().unwrap(), "--output", sim_root.to_str().unwrap(),
+        "--feature", "f1", "--jitter-iters", "1",
+        "--sweep", "f1=1", "--sweep-range", "0:2", "--sweep-steps", "41",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows = sweep_rows(&sim_root);
+
+    let at = |cut: f64| move |v: f64| vec![f64::from(u8::from(v >= cut))];
+    write_scored(&root.join("perfect.parquet"), &rows, &["p"], at(1.0));
+    write_scored(&root.join("constant.parquet"), &rows, &["p"], |_| vec![0.0]);
+    write_scored(&root.join("shifted.parquet"), &rows, &["p"], at(1.1));
+    let oracle = root.join("oracle.parquet");
+    let truth: Vec<_> = rows
+        .iter()
+        .map(|(variant, id, v)| (variant.clone(), id.clone(), vec![i64::from(*v >= 1.0)]))
+        .collect();
+    write_oracle(&oracle, &truth, &["label"]);
+
+    let mut args = vec![
+        "compare",
+        "sweep",
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--oracle-labels",
+        oracle.to_str().unwrap(),
+    ];
+    let preds: Vec<String> = ["perfect", "constant", "shifted"]
+        .iter()
+        .map(|m| root.join(format!("{m}.parquet")).display().to_string())
+        .collect();
+    for p in &preds {
+        args.extend(["--predictions", p.as_str()]);
+    }
+    let result = run_json(&args);
+    let scores: std::collections::HashMap<String, serde_json::Value> = result["evaluations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let eval = &e["evaluation"];
+            assert!(eval["oracle"]["accuracy"]["sweep"].is_number(), "{eval}");
+            (
+                e["model_label"].as_str().unwrap().to_string(),
+                eval["sweep"][0].clone(),
+            )
+        })
+        .collect();
+
+    let perfect = &scores["perfect"];
+    assert_eq!(perfect["oracle"], true);
+    assert_eq!(perfect["n_paths"], 12);
+    assert_eq!(perfect["boundary_offset"]["median"], 0.0);
+    assert_eq!(perfect["monotonic_rate"], 1.0);
+    assert_eq!(perfect["never_flipped"], 0.0);
+    assert_eq!(perfect["accuracy"], 1.0);
+    assert_eq!(scores["constant"]["never_flipped"], 1.0);
+    assert_eq!(scores["constant"]["monotonic_rate"], 0.0);
+    let shifted = &scores["shifted"];
+    let offset = shifted["boundary_offset"]["median"].as_f64().unwrap();
+    assert!((offset - 0.1).abs() <= 0.05, "{shifted}");
+    assert_eq!(shifted["monotonic_rate"], 1.0);
+    assert!(shifted["accuracy"].as_f64().unwrap() < 1.0);
+
+    // Multiclass with an abstain class: the oracle answers `mid` (cannot
+    // decide) near the cutoff, and so does this model.
+    let band = |v: f64| match v {
+        v if v < 0.9 => 0,
+        v if v <= 1.1 => 1,
+        _ => 2,
+    };
+    let one_hot = |c: usize| {
+        (0..3)
+            .map(|j| f64::from(u8::from(j == c)))
+            .collect::<Vec<_>>()
+    };
+    let multi = root.join("multi.parquet");
+    write_scored(&multi, &rows, &["low", "mid", "high"], |v| one_hot(band(v)));
+    let truth: Vec<_> = rows
+        .iter()
+        .map(|(variant, id, v)| {
+            let c = band(*v);
+            (
+                variant.clone(),
+                id.clone(),
+                (0..3).map(|j| i64::from(j == c)).collect(),
+            )
+        })
+        .collect();
+    write_oracle(&oracle, &truth, &["group_1", "group_2", "group_3"]);
+    #[rustfmt::skip]
+    let result = run_json(&[
+        "evaluate", "sweep", "--sim-root", sim_root.to_str().unwrap(),
+        "--labels", labels.to_str().unwrap(), "--task", "multiclass",
+        "--positive-group-id", "1", "--positive-group-id", "2", "--positive-group-id", "3",
+        "--predictions", multi.to_str().unwrap(),
+        "--oracle-labels", oracle.to_str().unwrap(), "--abstain-class", "mid",
+    ]);
+    let sweep = &result["sweep"][0];
+    assert_eq!(sweep["accuracy"], 1.0, "{sweep}");
+    // Two flips per path (low → mid → high), both where the oracle's are.
+    assert_eq!(sweep["extra_flips_rate"], 1.0);
+    assert_eq!(result["oracle"]["accuracy"]["sweep"], 1.0);
+    let _ = fs::remove_dir_all(&root);
+}

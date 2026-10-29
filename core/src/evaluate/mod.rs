@@ -252,11 +252,14 @@ impl Evaluator {
             .map(|flipper| score_flipper(model, &flipper.x, task, k, &thresholds))
             .transpose()?;
 
-        // Oracle labels for grid rows arrive with `--oracle-labels`; until
-        // then sweep is scored descriptively.
+        // With `--oracle-labels` every variant's `y` is the oracle's, grid
+        // rows included; without it sweep is scored descriptively.
         let sweep = simulated_variants
             .get("sweep")
-            .map(|grid| score_sweep(model, &grid.x, task, k, &thresholds, None))
+            .map(|grid| {
+                let oracle_y = config.oracle.as_ref().map(|_| &grid.y);
+                score_sweep(model, &grid.x, task, k, &thresholds, oracle_y)
+            })
             .transpose()?;
         let oracle = oracle::score_oracle(
             model,

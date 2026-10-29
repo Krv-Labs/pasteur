@@ -200,7 +200,8 @@ grid values. Sweep is scored for classifiers only.
 
 The full metrics compare the model with an **oracle**: the correct decision
 for every grid row, because moving a feature across its cutoff can change the
-correct answer. Rates are shares of paths.
+correct answer. Pass it with ``--oracle-labels`` (see `Oracle labels`_),
+covering the ``clean`` and ``sweep`` rows. Rates are shares of paths.
 
 .. list-table::
    :header-rows: 1
@@ -231,8 +232,8 @@ correct answer. Rates are shares of paths.
      - Median and quartiles of the model's flip value, in feature units, over
        paths where it flips exactly once.
 
-**Without oracle labels the output is descriptive.** Until per-row oracle
-labels are supplied, ``oracle`` is ``false`` and only ``model_flip_value``,
+**Without oracle labels the output is descriptive.** Without
+``--oracle-labels``, ``oracle`` is ``false`` and only ``model_flip_value``,
 ``extra_flips_rate`` and ``never_flipped`` are filled. ``never_flipped`` then
 counts every path whose decision never changes, so both ends of the grid get
 the same answer. A model may be right not to flip: read it against a range
@@ -337,10 +338,11 @@ made the case). The file is a parquet with one row per simulated row:
    * - Column
      - Meaning
    * - ``variant_name``
-     - ``clean``, ``blackout``, ``jitter_0`` … , or ``flipper``: the parquet
-       file stem, as ``compare --predictions-out`` writes it
+     - ``clean``, ``blackout``, ``jitter_0`` … , ``flipper``, or ``sweep``: the
+       parquet file stem, as ``compare --predictions-out`` writes it
    * - ``source_row_id``
-     - The row's ID; ``pair_<id>_step_<n>`` for flipper rows
+     - The row's ID; ``pair_<id>_step_<n>`` for flipper rows,
+       ``sweep_<case>_<feature>_step_<n>`` for sweep rows
    * - ``label``
      - Binary: 1 or 0
    * - ``group_<id>``
@@ -368,7 +370,8 @@ multilabel.
      - Definition and reading
    * - ``oracle.accuracy.<variant>``
      - Share of rows whose decision equals the oracle label, per variant
-       (``clean``, ``blackout``, ``jitter_0`` …, ``flipper``). Multilabel
+       (``clean``, ``blackout``, ``jitter_0`` …, ``flipper``, ``sweep``).
+       Multilabel
        counts a row as correct only when every label matches. Under blackout
        this is the accuracy against the oracle's answer for the row with the
        feature missing, which may itself be "cannot determine".
