@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- `--oracle-labels <parquet>` on `evaluate` and `compare`: per-row true
+  labels keyed by `(variant_name, source_row_id)` replace the labels copied
+  from the clean row, and a new `oracle` section scores the model's
+  decisions against them: accuracy per variant, jitter
+  `flip_rate_label_preserved`/`flip_rate_label_changed`, and flipper
+  `boundary_error` (median and IQR of `flip_t − oracle_flip_t`).
+- `--abstain-class <name>`, with `--oracle-labels`: blackout
+  `abstain_when_missing`, `decided_when_missing` and an abstain/decided
+  confusion against the oracle.
+
 ### Changed
 
 - Every evaluation `x` frame in `evaluate` and `compare` now carries the row

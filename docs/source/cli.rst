@@ -161,6 +161,16 @@ from each.
        labels without a contract threshold. Unused for multiclass (argmax).
        Regression: the clinical cutoff in target units, with no default;
        required for ``evaluate flipper`` and must match ``simulate``'s
+   * - ``--oracle-labels``
+     - none
+     - Parquet with the correct label for every simulated row, for models
+       whose right answer can change under a perturbation. Adds the
+       ``oracle`` section; see :ref:`oracle-labels`. Classifiers only
+   * - ``--abstain-class``
+     - none
+     - Needs ``--oracle-labels``. The model's output class that means
+       "cannot decide", e.g. ``cannot_determine``. Adds blackout abstention
+       metrics
    * - ``-o``, ``--output``
      - stdout
      - Write the JSON result to a file. The directory must already exist.
