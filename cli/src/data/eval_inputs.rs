@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use pasteur_core::{is_flipper_meta_column, EvaluationConfig, SimulationVariant, TaskType};
+use pasteur_core::{
+    is_flipper_meta_column, is_sweep_meta_column, EvaluationConfig, SimulationVariant, TaskType,
+};
 use pasteur_hf::layout;
 use polars::prelude::*;
 
@@ -46,7 +48,7 @@ pub fn build_evaluation_inputs(
         &source_row_id,
     )?;
 
-    let feature_order = if sim_type == "flipper" {
+    let feature_order = if is_grid(sim_type) {
         simulation_variants
             .values()
             .find_map(|per_dataset| per_dataset.get(dataset_name))
@@ -142,11 +144,22 @@ fn keyed_frame(df: &DataFrame, variant: &str, clean_ids: &Series) -> Result<Data
     Ok(out)
 }
 
+/// Flipper and sweep variants are grids of synthetic rows with meta columns,
+/// rather than perturbed copies of the clean rows.
+fn is_grid(sim_type: &str) -> bool {
+    matches!(sim_type, "flipper" | "sweep")
+}
+
+/// A grid's features: its columns minus the row key and grid meta columns.
 fn flipper_feature_order(df: &DataFrame) -> Vec<String> {
     df.get_column_names()
         .iter()
         .map(|s| s.to_string())
-        .filter(|name| !is_bookkeeping_column(name) && !is_flipper_meta_column(name))
+        .filter(|name| {
+            !is_bookkeeping_column(name)
+                && !is_flipper_meta_column(name)
+                && !is_sweep_meta_column(name)
+        })
         .collect()
 }
 
@@ -168,7 +181,7 @@ fn load_simulation_variants(
     for path in variant_files {
         let name = variant_name(path, sim_type);
         let df = keyed_frame(&read_parquet(path)?, &name, clean_ids)?;
-        let (x, y) = if sim_type == "flipper" {
+        let (x, y) = if is_grid(sim_type) {
             // Grid rows are synthetic patients with no label of their own:
             // 0 for classifiers, as before, and no target for regression.
             let placeholder: Vec<Column> = labels
@@ -229,7 +242,7 @@ pub fn variant_source_row_ids(variant: &SimulationVariant, fallback: &Series) ->
 }
 
 pub fn flipper_feature_order_from_inputs(inputs: &EvaluationInputs, sim_type: &str) -> Vec<String> {
-    if sim_type != "flipper" {
+    if !is_grid(sim_type) {
         return inputs.feature_order.clone();
     }
     for per_dataset in inputs.simulation_variants.values() {

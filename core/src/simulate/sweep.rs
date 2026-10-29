@@ -154,15 +154,16 @@ fn sweep_block(
 ) -> Result<DataFrame, CoreError> {
     let n_steps = grid.len();
     let n = x.height() * n_steps;
-    let rows: Vec<IdxSize> = (0..x.height() as IdxSize)
+    // Row indices double as the `sweep_case_row` column (polars' IdxSize is
+    // u32 without the `bigidx` feature; `generate` checked they fit).
+    let case_rows: Vec<u32> = (0..x.height() as u32)
         .flat_map(|r| std::iter::repeat_n(r, n_steps))
         .collect();
-    let mut data = x.take(&IdxCa::from_vec("idx".into(), rows.clone()))?;
+    let mut data = x.take(&IdxCa::from_vec("idx".into(), case_rows.clone()))?;
     let values: Vec<f64> = grid.iter().copied().cycle().take(n).collect();
     data.with_column(Series::new(feature.into(), values.clone()).into())?;
 
     let steps: Vec<u32> = (0..n_steps as u32).cycle().take(n).collect();
-    let case_rows: Vec<u32> = rows.iter().map(|&r| r as u32).collect();
     let mut columns: Vec<Column> = vec![
         Series::new(SWEEP_CASE_ROW_COL.into(), case_rows).into(),
         StringChunked::full(SWEEP_FEATURE_COL.into(), feature, n)

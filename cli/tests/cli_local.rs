@@ -469,6 +469,70 @@ fn multiclass_simulate_and_evaluate_flipper() {
 }
 
 #[test]
+fn simulate_and_evaluate_sweep() {
+    let root = temp_dir("sweep");
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(&labels, &[(11, &[1, 2, 3, 5, 9])]);
+    #[rustfmt::skip]
+    let out = run_cli(&[
+        "simulate", "--input", input.to_str().unwrap(), "--output", sim_root.to_str().unwrap(),
+        "--feature", "f1", "--jitter-iters", "1",
+        "--sweep", "f1=0.5", "--sweep", "f2",
+        "--sweep-range", "-2:2", "--sweep-steps", "9",
+    ]);
+    assert!(
+        out.status.success(),
+        "simulate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let grid = ParquetReader::new(fs::File::open(sim_root.join("sweep/sweep.parquet")).unwrap())
+        .finish()
+        .unwrap();
+    assert_eq!(grid.height(), 12 * 2 * 9);
+    let ids = grid.column("source_row_id").unwrap().str().unwrap();
+    assert_eq!(ids.get(0), Some("sweep_1_f1_step_0"));
+    assert_eq!(ids.get(grid.height() - 1), Some("sweep_12_f2_step_8"));
+
+    let model = fixture_model(&root.join("models"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("sweep", &sim_root, &labels, &model, "binary", &["11"]);
+    let sweep = result["sweep"].as_array().unwrap();
+    assert_eq!(sweep.len(), 2);
+    assert_eq!(sweep[0]["feature"], "f1");
+    assert_eq!(sweep[0]["cutoff"], 0.5);
+    assert_eq!(sweep[1]["feature"], "f2");
+    for s in sweep {
+        assert_eq!(s["n_paths"], 12);
+        assert_eq!(s["oracle"], false);
+        assert!(s["never_flipped"].is_number());
+        assert!(s["extra_flips_rate"].is_number());
+        assert!(s["monotonic_rate"].is_null());
+    }
+
+    // Other variants don't report sweep.
+    let jitter = evaluate_json("jitter", &sim_root, &labels, &model, "binary", &["11"]);
+    assert!(jitter.get("sweep").is_none());
+
+    let err = run_cli(&[
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        root.join("bad").to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--sweep",
+        "f1",
+    ]);
+    assert!(!err.status.success());
+    assert!(String::from_utf8_lossy(&err.stderr).contains("--sweep-range"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn multilabel_simulate_and_evaluate_jitter() {
     let root = temp_dir("multilabel");
     let groups = ["11", "12"];

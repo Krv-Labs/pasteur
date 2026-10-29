@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use pasteur_core::{
     simulate::flipper::{PAIR_ID_COL, STEP_COL},
+    simulate::sweep::{SWEEP_CASE_ROW_COL, SWEEP_FEATURE_COL, SWEEP_STEP_COL},
     BlackoutConfig, BlackoutSimulator, FlipperConfig, FlipperSimulator, JitterConfig,
-    JitterSimulator, Simulator, TaskType,
+    JitterSimulator, Simulator, SweepConfig, SweepFeature, SweepSimulator, TaskType,
 };
 use pasteur_hf::layout;
 use polars::prelude::*;
@@ -31,6 +32,7 @@ pub fn run(args: SimulateArgs) -> Result<()> {
     run_blackout(&args, &features, &source_row_id, &row_ordinal)?;
     run_jitter_iters(&args, &features, &source_row_id, &row_ordinal)?;
     run_flipper(&args, &features, source_row_id.as_materialized_series())?;
+    run_sweep(&args, &features, source_row_id.as_materialized_series())?;
 
     layout::validate_sim_bundle(&args.output)
         .context("simulation output failed layout validation")?;
@@ -184,6 +186,90 @@ fn run_flipper(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series
     };
     let out = with_flipper_ids(&grid)?;
     write_variant(&args.output, "flipper", "flipper", &out)
+}
+
+/// Writes the single-feature sweep grid when `--sweep` names a feature.
+fn run_sweep(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series) -> Result<()> {
+    let sweep = &args.sweep;
+    if sweep.features.is_empty() {
+        if sweep.sweep_range.is_some()
+            || sweep.sweep_relative_to.is_some()
+            || sweep.sweep_near.is_some()
+        {
+            anyhow::bail!("--sweep-range, --sweep-relative-to and --sweep-near need --sweep");
+        }
+        return Ok(());
+    }
+    let range = sweep
+        .sweep_range
+        .as_deref()
+        .context("--sweep needs --sweep-range lo:hi")?;
+    let (lo, hi) = range
+        .split_once(':')
+        .and_then(|(lo, hi)| Some((lo.trim().parse().ok()?, hi.trim().parse().ok()?)))
+        .with_context(|| format!("--sweep-range must be lo:hi, got {range:?}"))?;
+    let features_to_sweep = sweep
+        .features
+        .iter()
+        .map(|spec| {
+            let (name, cutoff) = match spec.split_once('=') {
+                Some((name, cutoff)) => {
+                    let cutoff = cutoff
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("--sweep {spec:?}: cutoff is not a number"))?;
+                    (name, Some(cutoff))
+                }
+                None => (spec.as_str(), None),
+            };
+            Ok(SweepFeature {
+                name: name.trim().to_string(),
+                cutoff,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let config = SweepConfig {
+        features: features_to_sweep,
+        range: (lo, hi),
+        relative_to: sweep.sweep_relative_to,
+        n_steps: sweep.sweep_steps,
+        near: sweep.sweep_near,
+    };
+    let grid = SweepSimulator::new(config).generate(features)?;
+    write_variant(
+        &args.output,
+        "sweep",
+        "sweep",
+        &with_sweep_ids(&grid, source_row_id)?,
+    )
+}
+
+/// `source_row_id` is `sweep_<case id>_<feature>_step_<n>`.
+fn with_sweep_ids(grid: &DataFrame, source_row_id: &Series) -> Result<DataFrame> {
+    let n_rows = grid.height();
+    let case = grid.column(SWEEP_CASE_ROW_COL)?.u32()?;
+    let feature = grid.column(SWEEP_FEATURE_COL)?.str()?;
+    let step = grid.column(SWEEP_STEP_COL)?.u32()?;
+    let case_ids = source_row_id.str()?;
+    let ids: Vec<String> = (0..n_rows)
+        .map(|i| {
+            let case_id = case
+                .get(i)
+                .and_then(|r| case_ids.get(r as usize))
+                .unwrap_or("");
+            format!(
+                "sweep_{case_id}_{}_step_{}",
+                feature.get(i).unwrap_or(""),
+                step.get(i).unwrap_or(0)
+            )
+        })
+        .collect();
+    let row_ordinal: Vec<u32> = (0..n_rows as u32).collect();
+
+    let mut out = grid.clone();
+    out.with_column(Series::new(layout::SOURCE_ROW_ID_COL.into(), ids).into())?;
+    out.with_column(Series::new(layout::ROW_ORDINAL_COL.into(), row_ordinal).into())?;
+    Ok(out)
 }
 
 fn with_flipper_ids(grid: &DataFrame) -> Result<DataFrame> {

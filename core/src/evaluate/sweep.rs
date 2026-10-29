@@ -126,7 +126,7 @@ pub fn sweep_scores<D: PartialEq>(
     let cutoff = grid.column(SWEEP_CUTOFF_COL)?.f64()?;
 
     // feature -> case -> [(step, row)]
-    let mut paths: BTreeMap<&str, BTreeMap<u32, Vec<(u32, usize)>>> = BTreeMap::new();
+    let mut paths: BTreeMap<&str, BTreeMap<u32, GridPath>> = BTreeMap::new();
     for i in 0..n {
         let (Some(f), Some(c), Some(s)) = (feature.get(i), case.get(i), step.get(i)) else {
             return Err(CoreError::InvalidConfig(format!(
@@ -219,6 +219,9 @@ pub fn sweep_scores<D: PartialEq>(
     }
     Ok(out)
 }
+
+/// One path's `(sweep_step, grid row)` pairs.
+type GridPath = Vec<(u32, usize)>;
 
 #[derive(Default)]
 struct Tally {
