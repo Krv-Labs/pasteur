@@ -1114,3 +1114,217 @@ fn predictions_json(path: &Path) -> serde_json::Value {
     }
     columns.into()
 }
+
+/// Runs `compare` with `extra` flags and returns the normalised comparison
+/// JSON as text.
+fn compare_text(dir: &Path, sim_type: &str, base: &[String], extra: &[String]) -> String {
+    let output = dir.join("comparison.json");
+    let mut args: Vec<String> = vec!["compare".into(), sim_type.into()];
+    args.extend_from_slice(base);
+    args.extend_from_slice(extra);
+    args.extend(["--output".into(), output.display().to_string()]);
+    run_golden_cli(&args);
+    let text = serde_json::to_string_pretty(&golden_json(&fs::read(&output).unwrap())).unwrap();
+    let _ = fs::remove_file(&output);
+    text
+}
+
+fn classifier_base(sim_root: &Path, labels: &Path, task: &str, groups: &[&str]) -> Vec<String> {
+    let mut base: Vec<String> = vec![
+        "--sim-root".into(),
+        sim_root.display().to_string(),
+        "--labels".into(),
+        labels.display().to_string(),
+        "--task".into(),
+        task.into(),
+    ];
+    for g in groups {
+        base.extend(["--positive-group-id".into(), g.to_string()]);
+    }
+    base
+}
+
+/// `compare --model x.onnx --predictions-out p.parquet` then
+/// `compare --predictions p.parquet` (and `evaluate`) give the same metrics.
+#[test]
+fn precomputed_predictions_reproduce_onnx_metrics() {
+    let root = temp_dir("precomputed_golden");
+    let classifiers: [(&str, &str, &[&str], &[&str]); 3] = [
+        ("binary", "binary_zipmap", &["0", "1"], &["1"]),
+        (
+            "multiclass",
+            "multiclass_tensor",
+            &["low", "mid", "high"],
+            &["1", "2", "3"],
+        ),
+        (
+            "multilabel",
+            "multilabel_multioutput",
+            &["a", "b", "c"],
+            &["11", "12", "1"],
+        ),
+    ];
+    let mut runs: Vec<(PathBuf, String, Vec<String>)> = Vec::new();
+    for (task, fixture, classes, groups) in classifiers {
+        let dir = root.join(task);
+        fs::create_dir_all(&dir).unwrap();
+        let (sim_root, labels) = simulate_multi(&dir, task, groups);
+        let model = fixture_model(&dir.join("models"), fixture, task, classes);
+        runs.push((
+            model,
+            fixture.into(),
+            classifier_base(&sim_root, &labels, task, groups),
+        ));
+    }
+    let dir = root.join("regression");
+    fs::create_dir_all(&dir).unwrap();
+    let (sim_root, targets) = simulate_regression(&dir, Some("5.5"));
+    let linear = fixture_model(
+        &dir.join("linear"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+    let base = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--targets",
+        targets.to_str().unwrap(),
+        "--target-col",
+        "hba1c",
+        "--task",
+        "regression",
+        "--flip-threshold",
+        "5.5",
+    ]
+    .map(String::from)
+    .to_vec();
+    runs.push((linear, "regression_linear".into(), base));
+
+    for (model, label, base) in &runs {
+        for sim_type in ["blackout", "jitter", "flipper"] {
+            let preds = model.with_file_name(format!("preds_{sim_type}.parquet"));
+            let onnx = compare_text(
+                &root,
+                sim_type,
+                base,
+                &[
+                    "--model".into(),
+                    model.display().to_string(),
+                    "--predictions-out".into(),
+                    preds.display().to_string(),
+                ],
+            );
+            let precomputed = compare_text(
+                &root,
+                sim_type,
+                base,
+                &["--predictions".into(), preds.display().to_string()],
+            );
+            let relabelled =
+                onnx.replace(&format!("\"{label}\""), &format!("\"preds_{sim_type}\""));
+            assert_eq!(precomputed, relabelled, "{label} {sim_type}");
+
+            let evaluate = |flag: &str, path: &Path| {
+                let mut args: Vec<String> = vec!["evaluate".into(), sim_type.into()];
+                args.extend_from_slice(base);
+                args.extend([flag.into(), path.display().to_string()]);
+                serde_json::to_string_pretty(&golden_json(&run_golden_cli(&args))).unwrap()
+            };
+            assert_eq!(
+                evaluate("--predictions", &preds),
+                evaluate("--model", model),
+                "{label} {sim_type} evaluate"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn precomputed_predictions_mix_with_onnx_and_refuse_missing_rows() {
+    let root = temp_dir("precomputed_mix");
+    let groups = ["1", "2", "3"];
+    let (sim_root, labels) = simulate_multi(&root, "multiclass", &groups);
+    let model = fixture_model(
+        &root.join("models"),
+        "multiclass_tensor",
+        "multiclass",
+        &["low", "mid", "high"],
+    );
+    let base = classifier_base(&sim_root, &labels, "multiclass", &groups);
+    let preds = root.join("preds.parquet");
+    compare_text(
+        &root,
+        "jitter",
+        &base,
+        &[
+            "--model".into(),
+            model.display().to_string(),
+            "--predictions-out".into(),
+            preds.display().to_string(),
+        ],
+    );
+
+    // Mixed: the precomputed copy scores exactly like the ONNX model.
+    let mixed_out = root.join("mixed.parquet");
+    let mixed: serde_json::Value = serde_json::from_str(&compare_text(
+        &root,
+        "jitter",
+        &base,
+        &[
+            "--model".into(),
+            model.display().to_string(),
+            "--predictions".into(),
+            format!("scored_elsewhere={}", preds.display()),
+            "--predictions-out".into(),
+            mixed_out.display().to_string(),
+        ],
+    ))
+    .unwrap();
+    let text = serde_json::to_string(&mixed).unwrap();
+    assert!(text.contains("scored_elsewhere"), "{text}");
+    let written = ParquetReader::new(fs::File::open(&mixed_out).unwrap())
+        .finish()
+        .unwrap();
+    let onnx_low = written.column("multiclass_tensor__low").unwrap();
+    let pre_low = written.column("scored_elsewhere__low").unwrap();
+    assert!(onnx_low.equals(pre_low));
+
+    // A name clash is refused.
+    let mut args: Vec<String> = vec!["compare".into(), "jitter".into()];
+    args.extend_from_slice(&base);
+    args.extend([
+        "--model".into(),
+        model.display().to_string(),
+        "--predictions".into(),
+        format!("multiclass_tensor={}", preds.display()),
+    ]);
+    let out = Command::new(pasteur_cli()).args(&args).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("both named"));
+
+    // Drop one row: evaluation must fail rather than fill it.
+    let mut df = ParquetReader::new(fs::File::open(&preds).unwrap())
+        .finish()
+        .unwrap();
+    df = df.slice(1, df.height() - 1);
+    let short = root.join("short.parquet");
+    ParquetWriter::new(&mut fs::File::create(&short).unwrap())
+        .finish(&mut df)
+        .unwrap();
+    let mut args: Vec<String> = vec!["evaluate".into(), "jitter".into()];
+    args.extend_from_slice(&base);
+    args.extend(["--predictions".into(), short.display().to_string()]);
+    let out = Command::new(pasteur_cli()).args(&args).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no prediction for variant"), "{stderr}");
+
+    // --model and --predictions are exclusive on evaluate.
+    args.extend(["--model".into(), model.display().to_string()]);
+    let out = Command::new(pasteur_cli()).args(&args).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot be used with"));
+    let _ = fs::remove_dir_all(&root);
+}

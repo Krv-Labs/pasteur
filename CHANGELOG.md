@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- `evaluate` and `compare` take `--predictions [NAME=]PATH`: predictions
+  scored outside Pasteur, keyed by `(variant_name, source_row_id)` with one
+  Float64 column per output. `compare` takes it repeatedly and mixes it with
+  `--model`. A missing or duplicate row is an error. A single-model
+  `--predictions-out` file can be fed straight back in.
+
 ### Changed
 
 - Every evaluation `x` frame in `evaluate` and `compare` now carries the row

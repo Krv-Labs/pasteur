@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pasteur_core::TaskType;
@@ -20,9 +20,11 @@ pub enum Command {
     Simulate(SimulateArgs),
     /// Write a Hugging Face dataset card (README.md) for a simulation bundle.
     Card(CardArgs),
-    /// Score one local ONNX model against a local simulation bundle.
+    /// Score one local ONNX model, or precomputed predictions, against a local
+    /// simulation bundle.
     Evaluate(EvaluateArgs),
-    /// Score multiple local ONNX models side by side; optionally write predictions parquet.
+    /// Score ONNX models and precomputed predictions side by side; optionally
+    /// write predictions parquet.
     Compare(CompareArgs),
     /// List, remove, or clear the local Pasteur staging cache.
     Cache(CacheArgs),
@@ -67,6 +69,43 @@ pub struct TargetArgs {
     /// clean input's --id-col values.
     #[arg(long, default_value = "node_id")]
     pub targets_id_col: String,
+}
+
+/// Models scored outside Pasteur.
+#[derive(clap::Args, Clone)]
+pub struct PredictionsArgs {
+    /// Precomputed predictions parquet, in place of an ONNX model: one row per
+    /// evaluated row, keyed by `variant_name` and `source_row_id`, plus one
+    /// Float64 column per output (one for binary and regression, one per class
+    /// in class order for multiclass and multilabel). A single-model
+    /// `--predictions-out` file is accepted as-is. The model is named after
+    /// the file stem; `NAME=PATH` names it. `compare` takes it repeatedly.
+    #[arg(long = "predictions", value_name = "[NAME=]PATH", value_parser = parse_predictions)]
+    pub predictions: Vec<PredictionsSource>,
+}
+
+/// One `--predictions` value.
+#[derive(Clone, Debug)]
+pub struct PredictionsSource {
+    pub label: Option<String>,
+    pub path: PathBuf,
+}
+
+/// `NAME=PATH`, or a bare path; an existing file whose name holds `=` is
+/// taken as a path.
+fn parse_predictions(value: &str) -> Result<PredictionsSource, String> {
+    match value.split_once('=') {
+        Some((label, path)) if !label.is_empty() && !Path::new(value).exists() => {
+            Ok(PredictionsSource {
+                label: Some(label.to_string()),
+                path: path.into(),
+            })
+        }
+        _ => Ok(PredictionsSource {
+            label: None,
+            path: value.into(),
+        }),
+    }
 }
 
 #[derive(clap::Args)]
@@ -206,8 +245,14 @@ pub struct EvaluateArgs {
     pub labels: Option<PathBuf>,
     #[command(flatten)]
     pub targets: TargetArgs,
-    #[arg(long)]
-    pub model: PathBuf,
+    #[arg(
+        long,
+        required_unless_present = "predictions",
+        conflicts_with = "predictions"
+    )]
+    pub model: Option<PathBuf>,
+    #[command(flatten)]
+    pub predictions: PredictionsArgs,
     /// Model contract sidecar (`metadata.json`). Defaults to
     /// `{model_dir}/metadata.json`; pass an explicit path when the ONNX and
     /// contract live in different directories (e.g. a separate model registry).
@@ -257,8 +302,10 @@ pub struct CompareArgs {
     pub labels: Option<PathBuf>,
     #[command(flatten)]
     pub targets: TargetArgs,
-    #[arg(long = "model", required = true)]
+    #[arg(long = "model", required_unless_present = "predictions")]
     pub models: Vec<PathBuf>,
+    #[command(flatten)]
+    pub predictions: PredictionsArgs,
     /// Model contract sidecar (`metadata.json`). Defaults to
     /// `{model_dir}/metadata.json`; pass an explicit path when the ONNX and
     /// contract live in different directories (e.g. a separate model registry).
