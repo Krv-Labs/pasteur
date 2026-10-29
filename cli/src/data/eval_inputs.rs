@@ -197,13 +197,6 @@ fn placeholder_label(name: PlSmallStr, task: TaskType, n: usize) -> Series {
     }
 }
 
-pub fn model_feature_frame(
-    variant: &SimulationVariant,
-    feature_order: &[String],
-) -> Result<DataFrame> {
-    Ok(variant.x.select(feature_order.to_vec())?)
-}
-
 pub fn variant_source_row_ids(variant: &SimulationVariant, fallback: &Series) -> Result<Series> {
     if variant
         .x

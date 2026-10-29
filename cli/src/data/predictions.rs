@@ -1,15 +1,15 @@
 use anyhow::Result;
-use pasteur_core::{Model, SimulationVariant, TaskType};
+use pasteur_core::{SimulationVariant, TaskType};
 use pasteur_hf::layout;
-use pasteur_model::OnnxModel;
 use polars::prelude::*;
 
 use crate::data::all_agree::build_all_agree_column;
-use crate::data::eval_inputs::{model_feature_frame, variant_source_row_ids, EvaluationInputs};
+use crate::data::eval_inputs::{variant_source_row_ids, EvaluationInputs};
+use crate::model::LoadedModel;
 
 pub fn build_predictions_table(
     inputs: &EvaluationInputs,
-    models: &[(String, OnnxModel)],
+    models: &[LoadedModel],
 ) -> Result<DataFrame> {
     let dataset_key = &inputs.dataset_name;
     let mut rows = PredictionRows::new(models, inputs.eval_config.task);
@@ -36,10 +36,10 @@ struct PredictionRows {
 }
 
 impl PredictionRows {
-    fn new(models: &[(String, OnnxModel)], task: TaskType) -> Self {
+    fn new(models: &[LoadedModel], task: TaskType) -> Self {
         let classes = models
             .first()
-            .map(|(_, m)| m.output_columns().to_vec())
+            .map(|m| m.output_columns.clone())
             .unwrap_or_default();
         Self {
             task,
@@ -56,7 +56,7 @@ impl PredictionRows {
         name: &str,
         variant: &SimulationVariant,
         inputs: &EvaluationInputs,
-        models: &[(String, OnnxModel)],
+        models: &[LoadedModel],
     ) -> Result<()> {
         let n = variant.x.height();
         let k = self.classes.len();
@@ -68,7 +68,6 @@ impl PredictionRows {
         }
         let ids = variant_source_row_ids(variant, &inputs.source_row_id)?;
         let id_strings = ids.str()?;
-        let x = model_feature_frame(variant, &inputs.feature_order)?;
 
         for i in 0..n {
             self.source_row_id
@@ -80,8 +79,10 @@ impl PredictionRows {
             let col = col.f64()?;
             out.extend((0..n).map(|i| col.get(i)));
         }
-        for (preds, (_, model)) in self.per_model_preds.iter_mut().zip(models) {
-            let frame = model.predict_proba(&x)?;
+        for (preds, m) in self.per_model_preds.iter_mut().zip(models) {
+            // The whole frame: ONNX selects its features by name, precomputed
+            // predictions look rows up by key.
+            let frame = m.model.predict_proba(&variant.x)?;
             if frame.width() != k {
                 anyhow::bail!("model returned {} columns for {k} outputs", frame.width());
             }
@@ -100,7 +101,7 @@ impl PredictionRows {
 /// Regression gets `target` and one prediction column per model.
 fn assemble_dataframe(
     rows: PredictionRows,
-    models: &[(String, OnnxModel)],
+    models: &[LoadedModel],
     cutoff: Option<f64>,
 ) -> DataFrame {
     let n_rows = rows.source_row_id.len();
@@ -124,8 +125,9 @@ fn assemble_dataframe(
     }
     let thresholds: Vec<Vec<f64>> = models
         .iter()
-        .map(|(_, m)| match rows.task {
+        .map(|m| match rows.task {
             TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel => m
+                .model
                 .decision_thresholds()
                 .unwrap_or_else(|| vec![0.5; rows.classes.len()]),
             TaskType::Regression => cutoff.into_iter().collect(),
@@ -139,9 +141,9 @@ fn assemble_dataframe(
             .map(Some)
             .collect(),
     };
-    for ((model_label, _), preds) in models.iter().zip(rows.per_model_preds) {
+    for (m, preds) in models.iter().zip(rows.per_model_preds) {
         for (class, col) in rows.classes.iter().zip(preds) {
-            columns.push(Series::new(suffix(model_label, class).as_str().into(), col).into());
+            columns.push(Series::new(suffix(&m.label, class).as_str().into(), col).into());
         }
     }
     columns.push(Series::new("all_agree".into(), all_agree).into());
