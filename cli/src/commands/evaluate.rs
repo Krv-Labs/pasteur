@@ -3,7 +3,8 @@ use pasteur_core::Evaluator;
 
 use crate::args::EvaluateArgs;
 use crate::data::{
-    build_evaluation_inputs, flipper_feature_order_from_inputs, resolve_flip_threshold, LabelSource,
+    apply_oracle_labels, build_evaluation_inputs, flipper_feature_order_from_inputs,
+    resolve_flip_threshold, LabelSource,
 };
 use crate::io::print_or_write;
 use crate::model::load_model;
@@ -16,7 +17,7 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         &args.positive_group_ids,
         &args.targets,
     )?;
-    let inputs = build_evaluation_inputs(
+    let mut inputs = build_evaluation_inputs(
         &args.sim_root,
         &args.sim_type,
         &source,
@@ -24,6 +25,8 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         &args.dataset_name,
         resolve_flip_threshold(task, &args.sim_type, args.flip_threshold)?,
     )?;
+
+    apply_oracle_labels(&mut inputs, &args.oracle)?;
 
     let feature_order = flipper_feature_order_from_inputs(&inputs, &args.sim_type);
     let model = load_model(

@@ -69,6 +69,7 @@ pub fn build_evaluation_inputs(
         .to_string()],
         flip_threshold,
         task,
+        oracle: None,
     };
 
     Ok(EvaluationInputs {

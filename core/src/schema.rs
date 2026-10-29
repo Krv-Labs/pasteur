@@ -111,6 +111,10 @@ pub struct EvaluationConfig {
     pub flip_threshold: f64,
     #[serde(default)]
     pub task: TaskType,
+    /// Set when every variant's `y` holds per-row oracle labels rather than
+    /// a copy of the clean row's label; turns on `EvaluationResult::oracle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle: Option<crate::evaluate::OracleConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,12 +148,10 @@ pub struct EvaluationResult {
     /// Regression detail, in the target's units. Absent for classifiers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression: Option<RegressionScores>,
-    /// Reserved for metrics scored against per-row oracle labels. Always
-    /// `None` for now, so the output is unchanged.
-    // ponytail: untyped slot so parallel branches don't collide here; the
-    // branch that fills it gives it a real type.
+    /// Metrics against per-row oracle labels (`--oracle-labels`). Absent
+    /// without them, so the output is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oracle: Option<serde_json::Value>,
+    pub oracle: Option<crate::evaluate::OracleScores>,
     /// Reserved for single-feature sweep metrics. Always `None` for now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<serde_json::Value>,
