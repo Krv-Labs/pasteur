@@ -206,8 +206,33 @@ pub struct SimulateArgs {
     pub flipper_pairs: usize,
     #[arg(long, default_value_t = 20)]
     pub flipper_steps: usize,
+    #[command(flatten)]
+    pub sweep: SweepArgs,
     #[arg(long, default_value = "output")]
     pub output: PathBuf,
+}
+
+/// The single-feature sweep grid. Without `--sweep`, `simulate` skips it.
+#[derive(clap::Args)]
+pub struct SweepArgs {
+    /// Feature to sweep, optionally with its cutoff (`feature=cutoff`).
+    /// Repeatable, one grid per feature.
+    #[arg(long = "sweep", value_name = "FEATURE[=CUTOFF]")]
+    pub features: Vec<String>,
+    /// Grid range `lo:hi`: absolute, or a multiplier of each feature's
+    /// cutoff when --sweep-relative-to is set. Required with --sweep.
+    #[arg(long, value_name = "LO:HI", allow_hyphen_values = true)]
+    pub sweep_range: Option<String>,
+    /// Makes --sweep-range relative, and is the cutoff for every --sweep
+    /// feature that does not give its own.
+    #[arg(long, value_name = "CUTOFF")]
+    pub sweep_relative_to: Option<f64>,
+    /// Grid points over --sweep-range, both ends included.
+    #[arg(long, default_value_t = 25)]
+    pub sweep_steps: usize,
+    /// Adds --sweep-steps more points within ±FRAC of the cutoff (e.g. 0.1).
+    #[arg(long, value_name = "FRAC")]
+    pub sweep_near: Option<f64>,
 }
 
 #[derive(clap::Args)]

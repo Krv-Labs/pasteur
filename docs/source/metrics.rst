@@ -65,6 +65,8 @@ the matching metric from each run:
      - ``jitter_stability`` (needs ``--jitter-iters`` of 2 or more)
    * - ``evaluate flipper``
      - ``flipper_stability``
+   * - ``evaluate sweep``
+     - ``sweep`` (see `Sweep`_)
 
 **ROC AUC needs both classes.** If the clean cohort has no positive rows,
 or no negative rows, ROC AUC is reported as 0.5 rather than as an error.
@@ -99,9 +101,10 @@ Per-patient predictions
    * - Column
      - Meaning
    * - ``source_row_id``
-     - The patient's original ID (synthetic path ID for flipper rows)
+     - The patient's original ID (synthetic path ID for flipper and sweep
+       rows)
    * - ``variant_name``
-     - ``clean``, ``blackout``, ``jitter_0`` … , or ``flipper``
+     - ``clean``, ``blackout``, ``jitter_0`` … , ``flipper``, or ``sweep``
    * - ``label``
      - 1 if the patient is in the positive group, else 0
    * - one column per model
@@ -183,6 +186,62 @@ grids store class indices in ``--positive-group-id`` order, and multilabel
 grids store the label index in ``pair_label``. Evaluating a grid built for a
 different task is an error. Evaluating one built with the same task but
 different groups is not detected.
+
+Sweep
+-----
+
+``evaluate sweep`` adds a ``sweep`` list to the JSON, one entry per swept
+feature. A *path* is one source row swept over one feature. The model's
+decision at each step is the positive class at or over ``--flip-threshold``
+(binary), the argmax class (multiclass), or the set of labels at or over their
+thresholds (multilabel). A *flip* is a step where the decision differs from
+the step before, and its *flip value* is the midpoint of the two bracketing
+grid values. Sweep is scored for classifiers only.
+
+The full metrics compare the model with an **oracle**: the correct decision
+for every grid row, because moving a feature across its cutoff can change the
+correct answer. Rates are shares of paths.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Definition
+   * - ``boundary_offset``
+     - Median, ``q25`` and ``q75`` of ``(model flip value − oracle flip
+       value) / |cutoff|``, over monotonic paths. 0 means the model's boundary
+       is where the true one is; positive means it flips later on the grid.
+       ``boundary_offset_units`` is the same in the feature's units. Null
+       without a cutoff (for the relative form) or without monotonic paths.
+   * - ``monotonic_rate``
+     - Paths where the model and the oracle each flip exactly once, to the
+       same decision. Higher is better.
+   * - ``never_flipped``
+     - Among paths where the oracle flips, the share where the model never
+       does. Read it as "ignores this feature". Lower is better.
+   * - ``extra_flips_rate``
+     - Paths where the model flips more than once. A model that reads digit
+       patterns rather than magnitudes flips back and forth. Lower is better.
+   * - ``accuracy``, ``accuracy_by_step``
+     - Accuracy against the oracle over every grid row, and at each step
+       (with that step's ``value``). The dip around the cutoff shows how wide
+       the model's uncertain band is.
+   * - ``model_flip_value``
+     - Median and quartiles of the model's flip value, in feature units, over
+       paths where it flips exactly once.
+
+**Without oracle labels the output is descriptive.** Until per-row oracle
+labels are supplied, ``oracle`` is ``false`` and only ``model_flip_value``,
+``extra_flips_rate`` and ``never_flipped`` are filled. ``never_flipped`` then
+counts every path whose decision never changes, so both ends of the grid get
+the same answer. A model may be right not to flip: read it against a range
+that you know crosses the cutoff. ``boundary_offset``, ``monotonic_rate`` and
+the accuracies are ``null``.
+
+**The grid limits the resolution.** Flip values are grid midpoints, so an
+offset is exact only to within one grid step. Use ``--sweep-near`` to add
+points close to the cutoff.
 
 Regression models
 -----------------
