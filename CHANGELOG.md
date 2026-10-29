@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- A `sweep` simulator, Flipper's single-feature sibling: `simulate --sweep
+  feature[=cutoff]` with `--sweep-range`, `--sweep-relative-to`,
+  `--sweep-steps` and `--sweep-near` writes `sweep/sweep.parquet`, and
+  `evaluate sweep` reports `boundary_offset`, `monotonic_rate`,
+  `never_flipped`, `extra_flips_rate` and `accuracy_by_step` per feature in a
+  new `sweep` section. Until oracle labels are supported, the section is
+  descriptive (`oracle: false`). Classifiers only.
+
 ### Changed
 
 - Every evaluation `x` frame in `evaluate` and `compare` now carries the row

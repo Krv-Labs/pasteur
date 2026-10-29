@@ -72,6 +72,23 @@ Important options:
    * - ``--flipper-steps``
      - ``20``
      - Interpolation steps per flipper pair
+   * - ``--sweep``
+     - none
+     - Feature to sweep, as ``feature`` or ``feature=cutoff``. Repeatable.
+       Enables the sweep grid
+   * - ``--sweep-range``
+     - required with ``--sweep``
+     - Grid range ``lo:hi``, absolute or relative to the cutoff
+   * - ``--sweep-relative-to``
+     - none
+     - Makes ``--sweep-range`` a multiplier of each feature's cutoff, and is
+       the cutoff for features that do not give one
+   * - ``--sweep-steps``
+     - ``25``
+     - Grid points over ``--sweep-range``, both ends included
+   * - ``--sweep-near``
+     - none
+     - Adds ``--sweep-steps`` more points within ±this fraction of the cutoff
    * - ``--random-state``
      - ``42``
      - Random seed
@@ -79,6 +96,7 @@ Important options:
 The defaults for ``--id-col``, ``--feature``, and ``--positive-group-id``
 come from the example thyroid dataset. Always pass them for your own data.
 ``--jitter-scale`` is in units of the feature's standard deviation.
+See :doc:`simulations` for how the sweep grid is built.
 
 card
 ----
@@ -109,7 +127,8 @@ Score one local ONNX model:
      --model ./models/model.onnx \
      --output ./scores.json
 
-The positional simulation type can be ``blackout``, ``jitter``, or ``flipper``.
+The positional simulation type can be ``blackout``, ``jitter``, ``flipper``, or
+``sweep`` (classifiers only).
 Each run loads only that folder; see :doc:`metrics` for which metric to read
 from each.
 
@@ -157,7 +176,7 @@ from each.
        class. Rejected for multiclass, multilabel and regression models
    * - ``--flip-threshold``
      - ``0.5``
-     - Decision threshold used by flipper stability. Multilabel: applies to
+     - Decision threshold used by flipper and sweep. Multilabel: applies to
        labels without a contract threshold. Unused for multiclass (argmax).
        Regression: the clinical cutoff in target units, with no default;
        required for ``evaluate flipper`` and must match ``simulate``'s
