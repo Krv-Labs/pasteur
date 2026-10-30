@@ -213,6 +213,8 @@ covering the ``clean`` and ``sweep`` rows. Rates are shares of paths.
      - Median, ``q25`` and ``q75`` of ``(model flip value − oracle flip
        value) / |cutoff|``, over monotonic paths. 0 means the model's boundary
        is where the true one is; positive means it flips later on the grid.
+       Quartiles here, in ``model_flip_value`` and in ``oracle.flipper``
+       interpolate linearly between sorted values (numpy's default).
        ``boundary_offset_units`` is the same in the feature's units. Null
        without a cutoff (for the relative form) or without monotonic paths.
    * - ``monotonic_rate``
@@ -388,7 +390,8 @@ multilabel.
    * - ``oracle.flipper.boundary_error_median``, ``boundary_error_iqr``
      - For each pair, ``flip_t − oracle_flip_t``: where the model's decision
        flips along the path minus where the oracle's does. Median and
-       interquartile range over the pairs where both flip
+       interquartile range (``q75 − q25``, linearly interpolated) over the
+       pairs where both flip
        (``n_pairs_compared``). 0 means the model's boundary is where the true
        one is; negative means the model flips early, positive late.
    * - ``oracle.flipper.oracle_never_flipped``

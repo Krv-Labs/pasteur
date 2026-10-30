@@ -144,8 +144,33 @@ impl Evaluator {
                 (key.to_string(), value)
             })
             .collect();
-        // Per-feature sweep and oracle detail structs are reported for the
-        // first dataset with those evaluations (the CLI always scores one dataset).
+        // ponytail: sweep and oracle detail is per dataset and not averaged, so
+        // more than one dataset with it is refused rather than one picked in
+        // HashMap order. The CLI scores one dataset; add a per-dataset map if
+        // a library caller needs several.
+        for (what, n) in [
+            (
+                "sweep",
+                per_dataset_scores
+                    .iter()
+                    .filter(|s| s.sweep.is_some())
+                    .count(),
+            ),
+            (
+                "oracle",
+                per_dataset_scores
+                    .iter()
+                    .filter(|s| s.oracle.is_some())
+                    .count(),
+            ),
+        ] {
+            if n > 1 {
+                return Err(CoreError::InvalidConfig(format!(
+                    "{what} results are reported for one dataset, but {n} datasets have them; \
+                     evaluate each dataset separately"
+                )));
+            }
+        }
         let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
         let oracle = per_dataset_scores.iter_mut().find_map(|s| s.oracle.take());
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
@@ -255,20 +280,39 @@ impl Evaluator {
         }
         let jitter_variance = jitter_variances(&jitter_draws, k)?;
 
-        let flipper = simulated_variants
-            .get("flipper")
-            .map(|flipper| score_flipper(model, &flipper.x, task, k, &thresholds))
-            .transpose()?;
+        // Flipper and sweep predictions are kept for oracle scoring too, so
+        // each grid is predicted once.
+        let flipper = match simulated_variants.get("flipper") {
+            Some(flipper) => {
+                let p = predict_matrix(model, &flipper_model_features(&flipper.x)?, k)?;
+                if config.oracle.is_some() {
+                    variant_probs.insert("flipper".to_string(), p.clone());
+                }
+                Some(flipper::score_flipper_probs(
+                    &flipper.x,
+                    task,
+                    k,
+                    &thresholds,
+                    p,
+                )?)
+            }
+            None => None,
+        };
 
         // With `--oracle-labels` every variant's `y` is the oracle's, grid
         // rows included; without it sweep is scored descriptively.
-        let sweep = simulated_variants
-            .get("sweep")
-            .map(|grid| {
+        let sweep = match simulated_variants.get("sweep") {
+            Some(grid) => {
+                let p = predict_matrix(model, &grid.x, k)?;
                 let oracle_y = config.oracle.as_ref().map(|_| &grid.y);
-                score_sweep(model, &grid.x, task, k, &thresholds, oracle_y)
-            })
-            .transpose()?;
+                let scores = sweep::score_sweep_probs(&grid.x, task, &thresholds, oracle_y, &p)?;
+                if config.oracle.is_some() {
+                    variant_probs.insert("sweep".to_string(), p);
+                }
+                Some(scores)
+            }
+            None => None,
+        };
         let oracle = oracle::score_oracle(
             model,
             clean_dataset,

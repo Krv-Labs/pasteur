@@ -297,7 +297,7 @@ fn flipper_scores(
 }
 
 /// Linear-interpolation quantile of sorted values (numpy's default).
-fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
+pub(crate) fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
     let last = sorted.len().checked_sub(1)?;
     let pos = q * last as f64;
     let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
@@ -397,6 +397,21 @@ mod tests {
     }
 
     #[test]
+    fn evaluator_refuses_oracle_detail_for_two_datasets() {
+        let clean: HashMap<String, SimulationVariant> = ["a", "b"]
+            .into_iter()
+            .map(|d| (d.to_string(), variant(&[0.2, 0.9], &[0, 1])))
+            .collect();
+        let run = |clean: &HashMap<String, SimulationVariant>| {
+            crate::evaluate::Evaluator::new().run(&Echo, clean, &HashMap::new(), &config(true))
+        };
+        let err = run(&clean).unwrap_err().to_string();
+        assert!(err.contains("2 datasets"), "{err}");
+        let one: HashMap<_, _> = clean.into_iter().take(1).collect();
+        assert!(run(&one).unwrap().oracle.is_some());
+    }
+
+    #[test]
     fn binary_jitter_splits_flips_by_oracle_change() {
         // Rows: 0 stays, model stays; 1 stays, model flips (bad);
         // 2 changes, model follows (good); 3 changes, model stays.
@@ -428,11 +443,10 @@ mod tests {
         assert_eq!(j.flip_rate_label_changed, None);
     }
 
-    #[test]
-    fn boundary_error_is_model_minus_oracle_flip() {
-        // One pair, t = 0, .25, .5, .75, 1. The model crosses 0.5 at t=0.625
-        // (0.4 → 0.6 between steps 2 and 3); the oracle flips between steps
-        // 1 and 2, so oracle_flip_t = 0.375.
+    /// One pair, t = 0, .25, .5, .75, 1. The model crosses 0.5 at t=0.625
+    /// (0.4 → 0.6 between steps 2 and 3); the oracle flips between steps
+    /// 1 and 2, so oracle_flip_t = 0.375.
+    fn one_pair_flipper() -> SimulationVariant {
         let n = 5;
         let grid = DataFrame::new(
             n,
@@ -448,12 +462,40 @@ mod tests {
             ],
         )
         .unwrap();
-        let flipper = SimulationVariant {
+        SimulationVariant {
             x: grid,
             y: df!["label" => [0i64, 0, 1, 1, 1]].unwrap(),
-        };
+        }
+    }
+
+    /// `Echo` that counts its calls.
+    struct Counting(std::cell::Cell<usize>);
+
+    impl Model for Counting {
+        fn predict_proba(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
+            self.0.set(self.0.get() + 1);
+            Echo.predict_proba(df)
+        }
+    }
+
+    #[test]
+    fn oracle_scoring_reuses_flipper_predictions() {
+        let model = Counting(Default::default());
+        let clean = HashMap::from([("d".to_string(), variant(&[0.2, 0.9], &[0, 1]))]);
+        let flipper = HashMap::from([("d".to_string(), one_pair_flipper())]);
+        let variants = HashMap::from([("flipper".to_string(), flipper)]);
+        let out = crate::evaluate::Evaluator::new()
+            .run(&model, &clean, &variants, &config(true))
+            .unwrap();
+        assert!(out.oracle.unwrap().flipper.is_some());
+        // Once for the clean rows, once for the flipper grid.
+        assert_eq!(model.0.get(), 2);
+    }
+
+    #[test]
+    fn boundary_error_is_model_minus_oracle_flip() {
         let clean = variant(&[0.9], &[1]);
-        let f = run(&clean, vec![("flipper", flipper)])
+        let f = run(&clean, vec![("flipper", one_pair_flipper())])
             .unwrap()
             .flipper
             .unwrap();

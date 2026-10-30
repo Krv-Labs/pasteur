@@ -9,7 +9,8 @@
 //! Without them, only the descriptive ones are filled: the model's own flip
 //! value, `never_flipped` over all paths, and `extra_flips_rate`.
 
-use super::multi::{argmax_decision, label_matrix, threshold_decision};
+use super::multi::{argmax_decision, label_matrix, threshold_decision, Columns};
+use super::oracle::quantile;
 use super::{predict_matrix, Model};
 use crate::error::CoreError;
 use crate::schema::TaskType;
@@ -81,12 +82,23 @@ pub fn score_sweep(
     oracle_y: Option<&DataFrame>,
 ) -> Result<Vec<SweepScores>, CoreError> {
     let probs = predict_matrix(model, grid, n_outputs)?;
+    score_sweep_probs(grid, task, thresholds, oracle_y, &probs)
+}
+
+/// `score_sweep` on predictions the caller already has for the grid.
+pub(crate) fn score_sweep_probs(
+    grid: &DataFrame,
+    task: TaskType,
+    thresholds: &[f64],
+    oracle_y: Option<&DataFrame>,
+    probs: &Columns,
+) -> Result<Vec<SweepScores>, CoreError> {
     let decide = match task {
         TaskType::Multiclass => argmax_decision,
         _ => threshold_decision,
     };
     let decisions: Vec<Vec<bool>> = (0..grid.height())
-        .map(|i| decide(&probs, i, thresholds))
+        .map(|i| decide(probs, i, thresholds))
         .collect();
     let oracle = oracle_y
         .map(|y| {
@@ -241,25 +253,15 @@ fn flips<D: PartialEq>(xs: &[D]) -> Vec<usize> {
     (1..xs.len()).filter(|&k| xs[k] != xs[k - 1]).collect()
 }
 
-/// Median (mean of the middle two for even counts) and quartiles taken as
-/// `sorted[min(n − 1, ⌊q·n⌋)]`, matching the reference scripts.
+/// Median and quartiles by linear interpolation (numpy's default), the same
+/// quantiles as `oracle.flipper.boundary_error_*`.
 fn spread(mut xs: Vec<f64>) -> Option<Spread> {
     xs.retain(|x| x.is_finite());
-    if xs.is_empty() {
-        return None;
-    }
     xs.sort_by(f64::total_cmp);
-    let n = xs.len();
-    let q = |f: f64| xs[((f * n as f64) as usize).min(n - 1)];
-    let median = if n % 2 == 1 {
-        xs[n / 2]
-    } else {
-        (xs[n / 2 - 1] + xs[n / 2]) / 2.0
-    };
     Some(Spread {
-        median,
-        q25: q(0.25),
-        q75: q(0.75),
+        median: quantile(&xs, 0.5)?,
+        q25: quantile(&xs, 0.25)?,
+        q75: quantile(&xs, 0.75)?,
     })
 }
 
@@ -348,6 +350,13 @@ mod tests {
         assert!((s.extra_flips_rate - 1.0 / 3.0).abs() < 1e-12);
         // Midpoint of 9.5 and 10.0 on the two single-flip paths.
         assert!((s.model_flip_value.as_ref().unwrap().median - 9.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn spread_interpolates_like_oracle_quantiles() {
+        let s = spread(vec![4.0, 1.0, 3.0, 2.0, f64::NAN]).unwrap();
+        assert_eq!((s.median, s.q25, s.q75), (2.5, 1.75, 3.25));
+        assert!(spread(vec![f64::NAN]).is_none());
     }
 
     #[test]
