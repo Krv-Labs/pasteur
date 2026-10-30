@@ -469,6 +469,70 @@ fn multiclass_simulate_and_evaluate_flipper() {
 }
 
 #[test]
+fn simulate_and_evaluate_sweep() {
+    let root = temp_dir("sweep");
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(&labels, &[(11, &[1, 2, 3, 5, 9])]);
+    #[rustfmt::skip]
+    let out = run_cli(&[
+        "simulate", "--input", input.to_str().unwrap(), "--output", sim_root.to_str().unwrap(),
+        "--feature", "f1", "--jitter-iters", "1",
+        "--sweep", "f1=0.5", "--sweep", "f2",
+        "--sweep-range", "-2:2", "--sweep-steps", "9",
+    ]);
+    assert!(
+        out.status.success(),
+        "simulate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let grid = ParquetReader::new(fs::File::open(sim_root.join("sweep/sweep.parquet")).unwrap())
+        .finish()
+        .unwrap();
+    assert_eq!(grid.height(), 12 * 2 * 9);
+    let ids = grid.column("source_row_id").unwrap().str().unwrap();
+    assert_eq!(ids.get(0), Some("sweep_1_f1_step_0"));
+    assert_eq!(ids.get(grid.height() - 1), Some("sweep_12_f2_step_8"));
+
+    let model = fixture_model(&root.join("models"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("sweep", &sim_root, &labels, &model, "binary", &["11"]);
+    let sweep = result["sweep"].as_array().unwrap();
+    assert_eq!(sweep.len(), 2);
+    assert_eq!(sweep[0]["feature"], "f1");
+    assert_eq!(sweep[0]["cutoff"], 0.5);
+    assert_eq!(sweep[1]["feature"], "f2");
+    for s in sweep {
+        assert_eq!(s["n_paths"], 12);
+        assert_eq!(s["oracle"], false);
+        assert!(s["never_flipped"].is_number());
+        assert!(s["extra_flips_rate"].is_number());
+        assert!(s["monotonic_rate"].is_null());
+    }
+
+    // Other variants don't report sweep.
+    let jitter = evaluate_json("jitter", &sim_root, &labels, &model, "binary", &["11"]);
+    assert!(jitter.get("sweep").is_none());
+
+    let err = run_cli(&[
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        root.join("bad").to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--sweep",
+        "f1",
+    ]);
+    assert!(!err.status.success());
+    assert!(String::from_utf8_lossy(&err.stderr).contains("--sweep-range"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn multilabel_simulate_and_evaluate_jitter() {
     let root = temp_dir("multilabel");
     let groups = ["11", "12"];
@@ -910,4 +974,949 @@ fn version_flag_prints_crate_version() {
         stdout.trim(),
         format!("pasteur-cli {}", env!("CARGO_PKG_VERSION"))
     );
+}
+
+/// ONNX `evaluate` and `compare` output on the fixtures, checked against
+/// goldens under `tests/golden/` so a change to how evaluation inputs are
+/// built cannot silently change ONNX scores. `created_at` is dropped and
+/// prediction rows are sorted by row key; HashMap iteration order would
+/// otherwise reorder them run to run. Regenerate with
+/// `PASTEUR_UPDATE_GOLDEN=1 cargo test -p pasteur-cli onnx_output_matches_golden`.
+#[test]
+fn onnx_output_matches_golden() {
+    let root = temp_dir("golden");
+    let golden_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/onnx_outputs.json");
+    let mut actual = serde_json::Map::new();
+
+    let classifiers: [(&str, &str, &[&str], &[&str]); 3] = [
+        ("binary", "binary_zipmap", &["0", "1"], &["1"]),
+        (
+            "multiclass",
+            "multiclass_tensor",
+            &["low", "mid", "high"],
+            &["1", "2", "3"],
+        ),
+        (
+            "multilabel",
+            "multilabel_multioutput",
+            &["a", "b", "c"],
+            &["11", "12", "1"],
+        ),
+    ];
+    for (task, fixture, classes, groups) in classifiers {
+        let dir = root.join(task);
+        fs::create_dir_all(&dir).unwrap();
+        let (sim_root, labels) = simulate_multi(&dir, task, groups);
+        let model_a = fixture_model(&dir.join("models"), fixture, task, classes);
+        let model_b = model_a.with_file_name(format!("{fixture}_copy.onnx"));
+        fs::copy(&model_a, &model_b).unwrap();
+        let mut base: Vec<String> = vec![
+            "--sim-root".into(),
+            sim_root.display().to_string(),
+            "--labels".into(),
+            labels.display().to_string(),
+            "--task".into(),
+            task.into(),
+        ];
+        for g in groups {
+            base.extend(["--positive-group-id".into(), g.to_string()]);
+        }
+        record_golden_runs(&mut actual, task, &dir, &base, &[&model_a, &model_b]);
+    }
+
+    let dir = root.join("regression");
+    fs::create_dir_all(&dir).unwrap();
+    let (sim_root, targets) = simulate_regression(&dir, Some("5.5"));
+    let linear = fixture_model(
+        &dir.join("linear"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+    let forest = fixture_model(
+        &dir.join("forest"),
+        "regression_forest",
+        "regression",
+        &["hba1c"],
+    );
+    let base: Vec<String> = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--targets",
+        targets.to_str().unwrap(),
+        "--target-col",
+        "hba1c",
+        "--task",
+        "regression",
+        "--flip-threshold",
+        "5.5",
+    ]
+    .map(String::from)
+    .to_vec();
+    record_golden_runs(&mut actual, "regression", &dir, &base, &[&linear, &forest]);
+
+    // Compared as text: parsing the golden back can move a float by one ULP.
+    let actual = serde_json::to_string_pretty(&serde_json::Value::Object(actual)).unwrap() + "\n";
+    if std::env::var_os("PASTEUR_UPDATE_GOLDEN").is_some() {
+        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
+        fs::write(&golden_path, actual).unwrap();
+    } else {
+        let expected = fs::read_to_string(&golden_path).unwrap();
+        let (a, e): (serde_json::Value, serde_json::Value) = (
+            serde_json::from_str(&actual).unwrap(),
+            serde_json::from_str(&expected).unwrap(),
+        );
+        for (key, value) in e.as_object().unwrap() {
+            let same =
+                serde_json::to_string(&a[key]).unwrap() == serde_json::to_string(value).unwrap();
+            assert!(same, "{key} differs from {}", golden_path.display());
+        }
+        assert!(
+            actual == expected,
+            "output differs from {}",
+            golden_path.display()
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Runs `evaluate` (first model) and `compare` (all models, with
+/// `--predictions-out`) for each sim type and records the normalised output.
+fn record_golden_runs(
+    out: &mut serde_json::Map<String, serde_json::Value>,
+    task: &str,
+    dir: &Path,
+    base: &[String],
+    models: &[&Path],
+) {
+    for sim_type in ["blackout", "jitter", "flipper"] {
+        let mut args: Vec<String> = vec!["evaluate".into(), sim_type.into()];
+        args.extend_from_slice(base);
+        args.extend(["--model".into(), models[0].display().to_string()]);
+        out.insert(
+            format!("{task}/evaluate/{sim_type}"),
+            golden_json(&run_golden_cli(&args)),
+        );
+
+        let predictions = dir.join(format!("predictions_{sim_type}.parquet"));
+        let mut args: Vec<String> = vec!["compare".into(), sim_type.into()];
+        args.extend_from_slice(base);
+        for model in models {
+            args.extend(["--model".into(), model.display().to_string()]);
+        }
+        let comparison = dir.join(format!("compare_{sim_type}.json"));
+        args.extend([
+            "--predictions-out".into(),
+            predictions.display().to_string(),
+            "--output".into(),
+            comparison.display().to_string(),
+        ]);
+        run_golden_cli(&args);
+        out.insert(
+            format!("{task}/compare/{sim_type}"),
+            golden_json(&fs::read(&comparison).unwrap()),
+        );
+        out.insert(
+            format!("{task}/predictions/{sim_type}"),
+            predictions_json(&predictions),
+        );
+    }
+}
+
+fn run_golden_cli(args: &[String]) -> Vec<u8> {
+    let out = Command::new(pasteur_cli()).args(args).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout
+}
+
+fn golden_json(stdout: &[u8]) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("created_at");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(stdout).unwrap();
+    strip(&mut value);
+    value
+}
+
+/// The predictions parquet as `{column: [values]}`, rows sorted by
+/// `(variant_name, source_row_id)`.
+fn predictions_json(path: &Path) -> serde_json::Value {
+    let df = ParquetReader::new(fs::File::open(path).unwrap())
+        .finish()
+        .unwrap()
+        .sort(["variant_name", "source_row_id"], Default::default())
+        .unwrap();
+    let mut columns = serde_json::Map::new();
+    for column in df.columns() {
+        let values: Vec<serde_json::Value> = match column.dtype() {
+            DataType::String => {
+                let ca = column.str().unwrap();
+                (0..df.height())
+                    .map(|i| serde_json::json!(ca.get(i)))
+                    .collect()
+            }
+            _ => {
+                let cast = column.cast(&DataType::Float64).unwrap();
+                let ca = cast.f64().unwrap();
+                (0..df.height())
+                    .map(|i| serde_json::json!(ca.get(i)))
+                    .collect()
+            }
+        };
+        columns.insert(column.name().to_string(), values.into());
+    }
+    columns.into()
+}
+
+/// Runs `compare` with `extra` flags and returns the normalised comparison
+/// JSON as text.
+fn compare_text(dir: &Path, sim_type: &str, base: &[String], extra: &[String]) -> String {
+    let output = dir.join("comparison.json");
+    let mut args: Vec<String> = vec!["compare".into(), sim_type.into()];
+    args.extend_from_slice(base);
+    args.extend_from_slice(extra);
+    args.extend(["--output".into(), output.display().to_string()]);
+    run_golden_cli(&args);
+    let text = serde_json::to_string_pretty(&golden_json(&fs::read(&output).unwrap())).unwrap();
+    let _ = fs::remove_file(&output);
+    text
+}
+
+fn classifier_base(sim_root: &Path, labels: &Path, task: &str, groups: &[&str]) -> Vec<String> {
+    let mut base: Vec<String> = vec![
+        "--sim-root".into(),
+        sim_root.display().to_string(),
+        "--labels".into(),
+        labels.display().to_string(),
+        "--task".into(),
+        task.into(),
+    ];
+    for g in groups {
+        base.extend(["--positive-group-id".into(), g.to_string()]);
+    }
+    base
+}
+
+/// `compare --model x.onnx --predictions-out p.parquet` then
+/// `compare --predictions p.parquet` (and `evaluate`) give the same metrics.
+#[test]
+fn precomputed_predictions_reproduce_onnx_metrics() {
+    let root = temp_dir("precomputed_golden");
+    let classifiers: [(&str, &str, &[&str], &[&str]); 3] = [
+        ("binary", "binary_zipmap", &["0", "1"], &["1"]),
+        (
+            "multiclass",
+            "multiclass_tensor",
+            &["low", "mid", "high"],
+            &["1", "2", "3"],
+        ),
+        (
+            "multilabel",
+            "multilabel_multioutput",
+            &["a", "b", "c"],
+            &["11", "12", "1"],
+        ),
+    ];
+    let mut runs: Vec<(PathBuf, String, Vec<String>)> = Vec::new();
+    for (task, fixture, classes, groups) in classifiers {
+        let dir = root.join(task);
+        fs::create_dir_all(&dir).unwrap();
+        let (sim_root, labels) = simulate_multi(&dir, task, groups);
+        let model = fixture_model(&dir.join("models"), fixture, task, classes);
+        runs.push((
+            model,
+            fixture.into(),
+            classifier_base(&sim_root, &labels, task, groups),
+        ));
+    }
+    let dir = root.join("regression");
+    fs::create_dir_all(&dir).unwrap();
+    let (sim_root, targets) = simulate_regression(&dir, Some("5.5"));
+    let linear = fixture_model(
+        &dir.join("linear"),
+        "regression_linear",
+        "regression",
+        &["hba1c"],
+    );
+    let base = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--targets",
+        targets.to_str().unwrap(),
+        "--target-col",
+        "hba1c",
+        "--task",
+        "regression",
+        "--flip-threshold",
+        "5.5",
+    ]
+    .map(String::from)
+    .to_vec();
+    runs.push((linear, "regression_linear".into(), base));
+
+    for (model, label, base) in &runs {
+        for sim_type in ["blackout", "jitter", "flipper"] {
+            let preds = model.with_file_name(format!("preds_{sim_type}.parquet"));
+            let onnx = compare_text(
+                &root,
+                sim_type,
+                base,
+                &[
+                    "--model".into(),
+                    model.display().to_string(),
+                    "--predictions-out".into(),
+                    preds.display().to_string(),
+                ],
+            );
+            let precomputed = compare_text(
+                &root,
+                sim_type,
+                base,
+                &["--predictions".into(), preds.display().to_string()],
+            );
+            let relabelled =
+                onnx.replace(&format!("\"{label}\""), &format!("\"preds_{sim_type}\""));
+            assert_eq!(precomputed, relabelled, "{label} {sim_type}");
+
+            let evaluate = |flag: &str, path: &Path| {
+                let mut args: Vec<String> = vec!["evaluate".into(), sim_type.into()];
+                args.extend_from_slice(base);
+                args.extend([flag.into(), path.display().to_string()]);
+                serde_json::to_string_pretty(&golden_json(&run_golden_cli(&args))).unwrap()
+            };
+            assert_eq!(
+                evaluate("--predictions", &preds),
+                evaluate("--model", model),
+                "{label} {sim_type} evaluate"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn precomputed_predictions_mix_with_onnx_and_refuse_missing_rows() {
+    let root = temp_dir("precomputed_mix");
+    let groups = ["1", "2", "3"];
+    let (sim_root, labels) = simulate_multi(&root, "multiclass", &groups);
+    let model = fixture_model(
+        &root.join("models"),
+        "multiclass_tensor",
+        "multiclass",
+        &["low", "mid", "high"],
+    );
+    let base = classifier_base(&sim_root, &labels, "multiclass", &groups);
+    let preds = root.join("preds.parquet");
+    compare_text(
+        &root,
+        "jitter",
+        &base,
+        &[
+            "--model".into(),
+            model.display().to_string(),
+            "--predictions-out".into(),
+            preds.display().to_string(),
+        ],
+    );
+
+    // Mixed: the precomputed copy scores exactly like the ONNX model.
+    let mixed_out = root.join("mixed.parquet");
+    let mixed: serde_json::Value = serde_json::from_str(&compare_text(
+        &root,
+        "jitter",
+        &base,
+        &[
+            "--model".into(),
+            model.display().to_string(),
+            "--predictions".into(),
+            format!("scored_elsewhere={}", preds.display()),
+            "--predictions-out".into(),
+            mixed_out.display().to_string(),
+        ],
+    ))
+    .unwrap();
+    let text = serde_json::to_string(&mixed).unwrap();
+    assert!(text.contains("scored_elsewhere"), "{text}");
+    let written = ParquetReader::new(fs::File::open(&mixed_out).unwrap())
+        .finish()
+        .unwrap();
+    let onnx_low = written.column("multiclass_tensor__low").unwrap();
+    let pre_low = written.column("scored_elsewhere__low").unwrap();
+    assert!(onnx_low.equals(pre_low));
+
+    // A name clash is refused.
+    let mut args: Vec<String> = vec!["compare".into(), "jitter".into()];
+    args.extend_from_slice(&base);
+    args.extend([
+        "--model".into(),
+        model.display().to_string(),
+        "--predictions".into(),
+        format!("multiclass_tensor={}", preds.display()),
+    ]);
+    let out = Command::new(pasteur_cli()).args(&args).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("both named"));
+
+    // Drop one row: evaluation must fail rather than fill it.
+    let mut df = ParquetReader::new(fs::File::open(&preds).unwrap())
+        .finish()
+        .unwrap();
+    df = df.slice(1, df.height() - 1);
+    let short = root.join("short.parquet");
+    ParquetWriter::new(&mut fs::File::create(&short).unwrap())
+        .finish(&mut df)
+        .unwrap();
+    let mut args: Vec<String> = vec!["evaluate".into(), "jitter".into()];
+    args.extend_from_slice(&base);
+    args.extend(["--predictions".into(), short.display().to_string()]);
+    let out = Command::new(pasteur_cli()).args(&args).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no prediction for variant"), "{stderr}");
+
+    // --model and --predictions are exclusive on evaluate.
+    args.extend(["--model".into(), model.display().to_string()]);
+    let out = Command::new(pasteur_cli()).args(&args).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot be used with"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// `(variant_name, source_row_id, values of cols)` per row of a
+/// `--predictions-out` file.
+fn prediction_rows(path: &Path, cols: &[&str]) -> Vec<(String, String, Vec<f64>)> {
+    let df = ParquetReader::new(fs::File::open(path).unwrap())
+        .finish()
+        .unwrap();
+    let text = |name: &str| df.column(name).unwrap().str().unwrap().clone();
+    let (variant, id) = (text("variant_name"), text("source_row_id"));
+    let values: Vec<Float64Chunked> = cols
+        .iter()
+        .map(|c| df.column(c).unwrap().f64().unwrap().clone())
+        .collect();
+    (0..df.height())
+        .map(|i| {
+            (
+                variant.get(i).unwrap().to_string(),
+                id.get(i).unwrap().to_string(),
+                values.iter().map(|v| v.get(i).unwrap()).collect(),
+            )
+        })
+        .collect()
+}
+
+fn write_oracle(path: &Path, rows: &[(String, String, Vec<i64>)], label_cols: &[&str]) {
+    let mut columns: Vec<Column> = vec![
+        Series::new(
+            "variant_name".into(),
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+        Series::new(
+            "source_row_id".into(),
+            rows.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+    ];
+    for (j, name) in label_cols.iter().enumerate() {
+        let values: Vec<i64> = rows.iter().map(|r| r.2[j]).collect();
+        columns.push(Series::new((*name).into(), values).into());
+    }
+    let mut df = DataFrame::new(rows.len(), columns).unwrap();
+    ParquetWriter::new(&mut fs::File::create(path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+}
+
+/// Runs `args`, asserting success, and parses stdout as JSON.
+fn run_json(args: &[&str]) -> serde_json::Value {
+    let out = run_cli(args);
+    assert!(
+        out.status.success(),
+        "{args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// A two-feature binary bundle simulated with strong jitter and six flipper
+/// pairs, plus the fixture binary model.
+fn binary_oracle_bundle(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(&labels, &[(103, &[7, 8, 9, 10, 11, 12])]);
+    let out = run_cli(&[
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        sim_root.to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--labels",
+        labels.to_str().unwrap(),
+        "--jitter-iters",
+        "3",
+        "--jitter-scale",
+        "2.0",
+        "--flipper-pairs",
+        "6",
+        "--flipper-steps",
+        "9",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let model = fixture_model(&root.join("models"), "binary_zipmap", "binary", &["0", "1"]);
+    (sim_root, labels, model)
+}
+
+/// Per-row model probabilities for one simulation type, via `compare`.
+fn predictions_for(
+    root: &Path,
+    sim_type: &str,
+    common: &[&str],
+    cols: &[&str],
+) -> Vec<(String, String, Vec<f64>)> {
+    let path = root.join(format!("preds_{sim_type}.parquet"));
+    let mut args = vec!["compare", sim_type];
+    args.extend(common);
+    args.extend(["--predictions-out", path.to_str().unwrap()]);
+    let out = run_cli(&args);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    prediction_rows(&path, cols)
+}
+
+#[test]
+fn oracle_jitter_splits_flips_by_label_change() {
+    let root = temp_dir("oracle-jitter");
+    let (sim_root, labels, model) = binary_oracle_bundle(&root);
+    let common = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+    ];
+    let preds = predictions_for(&root, "jitter", &common, &["binary_zipmap"]);
+    let decide = |p: f64| i64::from(p >= 0.5);
+    let oracle = root.join("oracle.parquet");
+    let evaluate = |oracle: &Path| {
+        let mut args = vec!["evaluate", "jitter"];
+        args.extend(common);
+        args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+        run_json(&args)["oracle"].clone()
+    };
+
+    // The oracle agrees with every decision, so wherever jitter moved a
+    // decision the oracle moved too: the model always followed it.
+    let agree: Vec<_> = preds
+        .iter()
+        .map(|(v, id, p)| (v.clone(), id.clone(), vec![decide(p[0])]))
+        .collect();
+    write_oracle(&oracle, &agree, &["label"]);
+    let scores = evaluate(&oracle);
+    for (variant, acc) in scores["accuracy"].as_object().unwrap() {
+        assert_eq!(acc, 1.0, "{variant}");
+    }
+    let jitter = &scores["jitter"];
+    assert!(jitter["n_label_changed"].as_u64().unwrap() > 0, "{jitter}");
+    assert_eq!(jitter["flip_rate_label_changed"], 1.0);
+    assert_eq!(jitter["flip_rate_label_preserved"], 0.0);
+
+    // The oracle never changes its clean answer, so every decision jitter
+    // moved is a flip the label did not justify.
+    let clean: std::collections::HashMap<&str, i64> = preds
+        .iter()
+        .filter(|(v, _, _)| v == "clean")
+        .map(|(_, id, p)| (id.as_str(), decide(p[0])))
+        .collect();
+    let fixed: Vec<_> = preds
+        .iter()
+        .map(|(v, id, _)| (v.clone(), id.clone(), vec![clean[id.as_str()]]))
+        .collect();
+    write_oracle(&oracle, &fixed, &["label"]);
+    let draws: Vec<_> = preds.iter().filter(|(v, _, _)| v != "clean").collect();
+    let moved = draws
+        .iter()
+        .filter(|(_, id, p)| decide(p[0]) != clean[id.as_str()])
+        .count();
+    let jitter = evaluate(&oracle)["jitter"].clone();
+    assert_eq!(jitter["n_label_changed"], 0);
+    assert_eq!(jitter["n_label_preserved"], draws.len());
+    assert!(jitter["flip_rate_label_changed"].is_null());
+    let rate = jitter["flip_rate_label_preserved"].as_f64().unwrap();
+    assert!((rate - moved as f64 / draws.len() as f64).abs() < 1e-12);
+
+    // A row the oracle does not cover is an error, not a silent default.
+    write_oracle(&oracle, &fixed[1..], &["label"]);
+    let mut args = vec!["evaluate", "jitter"];
+    args.extend(common);
+    args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+    let out = run_cli(&args);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("miss 1 of"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn oracle_flipper_boundary_error() {
+    let root = temp_dir("oracle-flipper");
+    let (sim_root, labels, model) = binary_oracle_bundle(&root);
+    let common = [
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+    ];
+    let preds = predictions_for(&root, "flipper", &common, &["binary_zipmap"]);
+    // Nine steps, t = step / 8. The oracle turns positive at step 3, so it
+    // flips halfway between t = 2/8 and t = 3/8.
+    let rows: Vec<_> = preds
+        .iter()
+        .map(|(v, id, p)| {
+            let label = match id.rsplit_once("_step_") {
+                Some((_, step)) => i64::from(step.parse::<u32>().unwrap() >= 3),
+                None => i64::from(p[0] >= 0.5),
+            };
+            (v.clone(), id.clone(), vec![label])
+        })
+        .collect();
+    let oracle = root.join("oracle.parquet");
+    write_oracle(&oracle, &rows, &["label"]);
+    let mut args = vec!["evaluate", "flipper"];
+    args.extend(common);
+    args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+    let flipper = run_json(&args)["oracle"]["flipper"].clone();
+
+    // Each pair's model flip_t: where p crosses 0.5, interpolated between
+    // the bracketing steps.
+    let mut paths: std::collections::BTreeMap<&str, Vec<(u32, f64)>> = Default::default();
+    for (_, id, p) in preds.iter().filter(|(v, _, _)| v == "flipper") {
+        let (pair, step) = id.rsplit_once("_step_").unwrap();
+        paths
+            .entry(pair)
+            .or_default()
+            .push((step.parse().unwrap(), p[0]));
+    }
+    let mut errors: Vec<f64> = paths
+        .values_mut()
+        .filter_map(|path| {
+            path.sort_by_key(|(step, _)| *step);
+            path.windows(2).find_map(|w| {
+                let ((s0, p0), (_, p1)) = (w[0], w[1]);
+                ((p0 >= 0.5) != (p1 >= 0.5))
+                    .then(|| (s0 as f64 + (0.5 - p0) / (p1 - p0)) / 8.0 - 0.3125)
+            })
+        })
+        .collect();
+    errors.sort_by(f64::total_cmp);
+    assert!(!errors.is_empty(), "no pair flips: {flipper}");
+    let quantile = |q: f64| {
+        let pos = q * (errors.len() - 1) as f64;
+        let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
+        errors[lo] + (pos - lo as f64) * (errors[hi] - errors[lo])
+    };
+
+    assert_eq!(flipper["n_pairs"], paths.len());
+    assert_eq!(flipper["n_pairs_compared"], errors.len());
+    assert_eq!(flipper["oracle_never_flipped"], 0.0);
+    let median = flipper["boundary_error_median"].as_f64().unwrap();
+    assert!(
+        (median - quantile(0.5)).abs() < 1e-9,
+        "{median} vs {errors:?}"
+    );
+    let iqr = flipper["boundary_error_iqr"].as_f64().unwrap();
+    assert!((iqr - (quantile(0.75) - quantile(0.25))).abs() < 1e-9);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn oracle_multiclass_abstain_on_blackout() {
+    let root = temp_dir("oracle-abstain");
+    let groups = ["1", "2", "3"];
+    let (sim_root, labels) = simulate_multi(&root, "multiclass", &groups);
+    let model = fixture_model(
+        &root.join("models"),
+        "multiclass_tensor",
+        "multiclass",
+        &["low", "mid", "high"],
+    );
+    let mut common = vec![
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--model",
+        model.to_str().unwrap(),
+        "--task",
+        "multiclass",
+    ];
+    for g in &groups {
+        common.extend(["--positive-group-id", g]);
+    }
+    let cols = [
+        "multiclass_tensor__low",
+        "multiclass_tensor__mid",
+        "multiclass_tensor__high",
+    ];
+    let preds = predictions_for(&root, "blackout", &common, &cols);
+    let argmax = |p: &[f64]| (0..3).max_by(|&a, &b| p[a].total_cmp(&p[b])).unwrap();
+    let one_hot = |c: usize| (0..3).map(|j| i64::from(j == c)).collect::<Vec<_>>();
+    // The oracle says "mid" (cannot decide) for odd-numbered blackout rows
+    // and agrees with the model everywhere else.
+    let oracle_class = |v: &str, id: &str, p: &[f64]| {
+        if v == "blackout" && id.parse::<u32>().unwrap() % 2 == 1 {
+            1
+        } else {
+            argmax(p)
+        }
+    };
+    let rows: Vec<_> = preds
+        .iter()
+        .map(|(v, id, p)| (v.clone(), id.clone(), one_hot(oracle_class(v, id, p))))
+        .collect();
+    let oracle = root.join("oracle.parquet");
+    write_oracle(&oracle, &rows, &["group_1", "group_2", "group_3"]);
+
+    let mut expected = [[0usize; 2]; 2]; // [oracle decided][model decided]
+    for (v, id, p) in preds.iter().filter(|(v, _, _)| v == "blackout") {
+        let oracle_decided = oracle_class(v, id, p) != 1;
+        expected[usize::from(oracle_decided)][usize::from(argmax(p) != 1)] += 1;
+    }
+
+    let mut args = vec!["evaluate", "blackout"];
+    args.extend(&common);
+    args.extend(["--oracle-labels", oracle.to_str().unwrap()]);
+    args.extend(["--abstain-class", "mid"]);
+    let abstain = run_json(&args)["oracle"]["abstain"].clone();
+    assert_eq!(abstain["class"], "mid");
+    let c = &abstain["confusion"];
+    assert_eq!(c["oracle_abstain_model_abstain"], expected[0][0]);
+    assert_eq!(c["oracle_abstain_model_decided"], expected[0][1]);
+    assert_eq!(c["oracle_decided_model_abstain"], expected[1][0]);
+    assert_eq!(c["oracle_decided_model_decided"], expected[1][1]);
+    let missing = (expected[0][0] + expected[0][1]) as f64;
+    assert!(missing > 0.0);
+    let share = abstain["abstain_when_missing"].as_f64().unwrap();
+    assert!((share - expected[0][0] as f64 / missing).abs() < 1e-12);
+    let decided = abstain["decided_when_missing"].as_f64().unwrap();
+    assert!((decided - expected[0][1] as f64 / missing).abs() < 1e-12);
+
+    // The abstain class must be one of the model's classes, and needs an oracle.
+    let last = args.len() - 1;
+    args[last] = "unsure";
+    let out = run_cli(&args);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not one of"));
+    let mut no_oracle = vec!["evaluate", "blackout"];
+    no_oracle.extend(&common);
+    no_oracle.extend(["--abstain-class", "mid"]);
+    assert!(!run_cli(&no_oracle).status.success());
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// `(variant_name, source_row_id, f1)` for every clean and sweep row.
+fn sweep_rows(sim_root: &Path) -> Vec<(String, String, f64)> {
+    ["clean", "sweep"]
+        .iter()
+        .flat_map(|variant| {
+            let path = sim_root.join(format!("{variant}/{variant}.parquet"));
+            let df = ParquetReader::new(fs::File::open(path).unwrap())
+                .finish()
+                .unwrap();
+            let ids = df.column("source_row_id").unwrap().str().unwrap().clone();
+            let f1 = df.column("f1").unwrap().f64().unwrap().clone();
+            (0..df.height())
+                .map(|i| {
+                    let (id, v) = (ids.get(i).unwrap(), f1.get(i).unwrap());
+                    (variant.to_string(), id.to_string(), v)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// A precomputed predictions file: the row key plus one Float64 column per
+/// `(name, value)` that `score` returns.
+fn write_scored(
+    path: &Path,
+    rows: &[(String, String, f64)],
+    names: &[&str],
+    score: impl Fn(f64) -> Vec<f64>,
+) {
+    let mut columns: Vec<Column> = vec![
+        Series::new(
+            "variant_name".into(),
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+        Series::new(
+            "source_row_id".into(),
+            rows.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+        )
+        .into(),
+    ];
+    let scores: Vec<Vec<f64>> = rows.iter().map(|r| score(r.2)).collect();
+    for (j, name) in names.iter().enumerate() {
+        let values: Vec<f64> = scores.iter().map(|s| s[j]).collect();
+        columns.push(Series::new((*name).into(), values).into());
+    }
+    let mut df = DataFrame::new(rows.len(), columns).unwrap();
+    ParquetWriter::new(&mut fs::File::create(path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+}
+
+/// `simulate --sweep`, then precomputed predictions plus an oracle into
+/// `compare`: the sweep metrics must locate each model's boundary.
+#[test]
+fn sweep_scores_precomputed_predictions_against_the_oracle() {
+    let root = temp_dir("sweep-oracle");
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(
+        &labels,
+        &[
+            (103, &[7, 8, 9, 10, 11, 12]),
+            (1, &[1, 2, 3, 4]),
+            (2, &[5, 6, 7, 8]),
+            (3, &[9, 10, 11, 12]),
+        ],
+    );
+    // f1 = 1 is the cutoff; 41 steps over 0..2 put a grid point every 0.05.
+    #[rustfmt::skip]
+    let out = run_cli(&[
+        "simulate", "--input", input.to_str().unwrap(), "--output", sim_root.to_str().unwrap(),
+        "--feature", "f1", "--jitter-iters", "1",
+        "--sweep", "f1=1", "--sweep-range", "0:2", "--sweep-steps", "41",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows = sweep_rows(&sim_root);
+
+    let at = |cut: f64| move |v: f64| vec![f64::from(u8::from(v >= cut))];
+    write_scored(&root.join("perfect.parquet"), &rows, &["p"], at(1.0));
+    write_scored(&root.join("constant.parquet"), &rows, &["p"], |_| vec![0.0]);
+    write_scored(&root.join("shifted.parquet"), &rows, &["p"], at(1.1));
+    let oracle = root.join("oracle.parquet");
+    let truth: Vec<_> = rows
+        .iter()
+        .map(|(variant, id, v)| (variant.clone(), id.clone(), vec![i64::from(*v >= 1.0)]))
+        .collect();
+    write_oracle(&oracle, &truth, &["label"]);
+
+    let mut args = vec![
+        "compare",
+        "sweep",
+        "--sim-root",
+        sim_root.to_str().unwrap(),
+        "--labels",
+        labels.to_str().unwrap(),
+        "--oracle-labels",
+        oracle.to_str().unwrap(),
+    ];
+    let preds: Vec<String> = ["perfect", "constant", "shifted"]
+        .iter()
+        .map(|m| root.join(format!("{m}.parquet")).display().to_string())
+        .collect();
+    for p in &preds {
+        args.extend(["--predictions", p.as_str()]);
+    }
+    let result = run_json(&args);
+    let scores: std::collections::HashMap<String, serde_json::Value> = result["evaluations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let eval = &e["evaluation"];
+            assert!(eval["oracle"]["accuracy"]["sweep"].is_number(), "{eval}");
+            (
+                e["model_label"].as_str().unwrap().to_string(),
+                eval["sweep"][0].clone(),
+            )
+        })
+        .collect();
+
+    let perfect = &scores["perfect"];
+    assert_eq!(perfect["oracle"], true);
+    assert_eq!(perfect["n_paths"], 12);
+    assert_eq!(perfect["boundary_offset"]["median"], 0.0);
+    assert_eq!(perfect["monotonic_rate"], 1.0);
+    assert_eq!(perfect["never_flipped"], 0.0);
+    assert_eq!(perfect["accuracy"], 1.0);
+    assert_eq!(scores["constant"]["never_flipped"], 1.0);
+    assert_eq!(scores["constant"]["monotonic_rate"], 0.0);
+    let shifted = &scores["shifted"];
+    let offset = shifted["boundary_offset"]["median"].as_f64().unwrap();
+    assert!((offset - 0.1).abs() <= 0.05, "{shifted}");
+    assert_eq!(shifted["monotonic_rate"], 1.0);
+    assert!(shifted["accuracy"].as_f64().unwrap() < 1.0);
+
+    // Multiclass with an abstain class: the oracle answers `mid` (cannot
+    // decide) near the cutoff, and so does this model.
+    let band = |v: f64| match v {
+        v if v < 0.9 => 0,
+        v if v <= 1.1 => 1,
+        _ => 2,
+    };
+    let one_hot = |c: usize| {
+        (0..3)
+            .map(|j| f64::from(u8::from(j == c)))
+            .collect::<Vec<_>>()
+    };
+    let multi = root.join("multi.parquet");
+    write_scored(&multi, &rows, &["low", "mid", "high"], |v| one_hot(band(v)));
+    let truth: Vec<_> = rows
+        .iter()
+        .map(|(variant, id, v)| {
+            let c = band(*v);
+            (
+                variant.clone(),
+                id.clone(),
+                (0..3).map(|j| i64::from(j == c)).collect(),
+            )
+        })
+        .collect();
+    write_oracle(&oracle, &truth, &["group_1", "group_2", "group_3"]);
+    #[rustfmt::skip]
+    let result = run_json(&[
+        "evaluate", "sweep", "--sim-root", sim_root.to_str().unwrap(),
+        "--labels", labels.to_str().unwrap(), "--task", "multiclass",
+        "--positive-group-id", "1", "--positive-group-id", "2", "--positive-group-id", "3",
+        "--predictions", multi.to_str().unwrap(),
+        "--oracle-labels", oracle.to_str().unwrap(), "--abstain-class", "mid",
+    ]);
+    let sweep = &result["sweep"][0];
+    assert_eq!(sweep["accuracy"], 1.0, "{sweep}");
+    // Two flips per path (low → mid → high), both where the oracle's are.
+    assert_eq!(sweep["extra_flips_rate"], 1.0);
+    assert_eq!(result["oracle"]["accuracy"]["sweep"], 1.0);
+    let _ = fs::remove_dir_all(&root);
 }

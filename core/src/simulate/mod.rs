@@ -3,10 +3,12 @@ pub mod flipper;
 mod jitter;
 mod patient;
 mod rng;
+pub mod sweep;
 
 pub use blackout::BlackoutSimulator;
 pub use flipper::FlipperSimulator;
 pub use jitter::JitterSimulator;
+pub use sweep::SweepSimulator;
 
 use crate::error::CoreError;
 use polars::prelude::*;

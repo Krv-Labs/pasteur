@@ -170,7 +170,7 @@ fn decision_flip_rate(draws: &[Columns], task: TaskType, thresholds: &[f64]) -> 
 }
 
 /// Row `i`'s decision as a one-hot over classes: the most probable one.
-fn argmax_decision(draw: &[Vec<f64>], i: usize, _thresholds: &[f64]) -> Vec<bool> {
+pub(crate) fn argmax_decision(draw: &[Vec<f64>], i: usize, _thresholds: &[f64]) -> Vec<bool> {
     let best = (0..draw.len())
         .max_by(|&a, &b| draw[a][i].total_cmp(&draw[b][i]))
         .unwrap_or(0);
@@ -178,7 +178,7 @@ fn argmax_decision(draw: &[Vec<f64>], i: usize, _thresholds: &[f64]) -> Vec<bool
 }
 
 /// Row `i`'s decision as the set of labels at or over their threshold.
-fn threshold_decision(draw: &[Vec<f64>], i: usize, thresholds: &[f64]) -> Vec<bool> {
+pub(crate) fn threshold_decision(draw: &[Vec<f64>], i: usize, thresholds: &[f64]) -> Vec<bool> {
     (0..draw.len())
         .map(|j| draw[j][i] >= thresholds[j])
         .collect()

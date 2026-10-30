@@ -106,6 +106,11 @@ impl<'a> LabelSource<'a> {
 pub fn resolve_flip_threshold(task: TaskType, sim_type: &str, given: Option<f64>) -> Result<f64> {
     match (task, given) {
         (TaskType::Binary | TaskType::Multiclass | TaskType::Multilabel, t) => Ok(t.unwrap_or(0.5)),
+        // Sweep metrics are currently wired for classifiers only; add a
+        // regression decision (prediction ≥ cutoff) when one is needed.
+        (TaskType::Regression, _) if sim_type == "sweep" => anyhow::bail!(
+            "sweep is scored for classifiers only; regression models can't be evaluated on it yet"
+        ),
         (TaskType::Regression, Some(t)) if t.is_finite() => Ok(t),
         (TaskType::Regression, Some(t)) => {
             anyhow::bail!("--flip-threshold must be finite, got {t}")

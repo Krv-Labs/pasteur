@@ -1,4 +1,5 @@
 use super::metrics::series_to_f64;
+use super::multi::Columns;
 use super::{predict_matrix, Model};
 use crate::error::CoreError;
 use crate::schema::TaskType;
@@ -176,6 +177,12 @@ pub fn score_flipper(
     n_outputs: usize,
     thresholds: &[f64],
 ) -> Result<FlipperScores, CoreError> {
+    check_grid_task(grid, task)?;
+    let probs = predict_matrix(model, &flipper_model_features(grid)?, n_outputs)?;
+    score_flipper_probs(grid, task, n_outputs, thresholds, probs)
+}
+
+fn check_grid_task(grid: &DataFrame, task: TaskType) -> Result<(), CoreError> {
     let has_pair_label = grid.get_column_index(PAIR_LABEL_COL).is_some();
     if has_pair_label != (task == TaskType::Multilabel) {
         return Err(CoreError::InvalidConfig(format!(
@@ -188,8 +195,19 @@ pub fn score_flipper(
             }
         )));
     }
-    let features = flipper_model_features(grid)?;
-    let mut probs = predict_matrix(model, &features, n_outputs)?;
+    Ok(())
+}
+
+/// `score_flipper` on predictions the caller already has for the grid's
+/// model features (one column per output, in grid row order).
+pub(crate) fn score_flipper_probs(
+    grid: &DataFrame,
+    task: TaskType,
+    n_outputs: usize,
+    thresholds: &[f64],
+    mut probs: Columns,
+) -> Result<FlipperScores, CoreError> {
+    check_grid_task(grid, task)?;
 
     // Each pair's labels and, per grid row, a score that crosses 0 exactly
     // where the decision changes.
@@ -208,21 +226,9 @@ pub fn score_flipper(
                 detour_rate: None,
             });
         }
-        TaskType::Multiclass => {
-            let class_a = class_indices(grid, LABEL_A_COL, n_outputs)?;
-            let class_b = class_indices(grid, LABEL_B_COL, n_outputs)?;
-            class_a
-                .into_iter()
-                .zip(class_b)
-                .enumerate()
-                .map(|(row, (a, b))| (vec![a, b], probs[b][row] - probs[a][row]))
-                .unzip()
+        TaskType::Multiclass | TaskType::Multilabel => {
+            multi_crossing(grid, task, &probs, n_outputs, thresholds)?
         }
-        TaskType::Multilabel => class_indices(grid, PAIR_LABEL_COL, n_outputs)?
-            .into_iter()
-            .enumerate()
-            .map(|(row, k)| (vec![k], probs[k][row] - thresholds[k]))
-            .unzip(),
     };
     let results = find_flip_points(grid, &Series::new("crossing".into(), crossing), 0.0)?;
 
@@ -254,6 +260,33 @@ pub fn score_flipper(
         per_label,
         detour_rate,
     })
+}
+
+/// Multiclass and multilabel: each grid row's pair labels, and a score that
+/// crosses 0 exactly where the decision between them changes (see
+/// `score_flipper`). `probs` holds one column per output.
+pub(crate) fn multi_crossing(
+    grid: &DataFrame,
+    task: TaskType,
+    probs: &[Vec<f64>],
+    n_outputs: usize,
+    thresholds: &[f64],
+) -> Result<(Vec<Vec<usize>>, Vec<f64>), CoreError> {
+    if task == TaskType::Multilabel {
+        return Ok(class_indices(grid, PAIR_LABEL_COL, n_outputs)?
+            .into_iter()
+            .enumerate()
+            .map(|(row, k)| (vec![k], probs[k][row] - thresholds[k]))
+            .unzip());
+    }
+    let class_a = class_indices(grid, LABEL_A_COL, n_outputs)?;
+    let class_b = class_indices(grid, LABEL_B_COL, n_outputs)?;
+    Ok(class_a
+        .into_iter()
+        .zip(class_b)
+        .enumerate()
+        .map(|(row, (a, b))| (vec![a, b], probs[b][row] - probs[a][row]))
+        .unzip())
 }
 
 /// A regression grid pairs a patient below the cutoff with one at or above
