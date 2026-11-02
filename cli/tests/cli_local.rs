@@ -1055,29 +1055,50 @@ fn onnx_output_matches_golden() {
     .to_vec();
     record_golden_runs(&mut actual, "regression", &dir, &base, &[&linear, &forest]);
 
-    // Compared as text: parsing the golden back can move a float by one ULP.
-    let actual = serde_json::to_string_pretty(&serde_json::Value::Object(actual)).unwrap() + "\n";
+    let actual = serde_json::Value::Object(actual);
     if std::env::var_os("PASTEUR_UPDATE_GOLDEN").is_some() {
         fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
-        fs::write(&golden_path, actual).unwrap();
+        let text = serde_json::to_string_pretty(&actual).unwrap() + "\n";
+        fs::write(&golden_path, text).unwrap();
     } else {
-        let expected = fs::read_to_string(&golden_path).unwrap();
-        let (a, e): (serde_json::Value, serde_json::Value) = (
-            serde_json::from_str(&actual).unwrap(),
-            serde_json::from_str(&expected).unwrap(),
-        );
-        for (key, value) in e.as_object().unwrap() {
-            let same =
-                serde_json::to_string(&a[key]).unwrap() == serde_json::to_string(value).unwrap();
-            assert!(same, "{key} differs from {}", golden_path.display());
-        }
-        assert!(
-            actual == expected,
-            "output differs from {}",
-            golden_path.display()
-        );
+        let expected: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&golden_path).unwrap()).unwrap();
+        assert_json_close(&actual, &expected, &golden_path.display().to_string());
     }
     let _ = fs::remove_dir_all(&root);
+}
+
+/// Checks that `actual` and `expected` have identical structure and values,
+/// allowing `1e-6` tolerance on floating-point numbers so 1-ULP `f32` SIMD
+/// differences in ONNX Runtime across architectures (e.g. NEON vs AVX2) do
+/// not fail the golden check.
+fn assert_json_close(actual: &serde_json::Value, expected: &serde_json::Value, path: &str) {
+    use serde_json::Value;
+    match (actual, expected) {
+        (Value::Object(a), Value::Object(e)) => {
+            let a_keys: Vec<_> = a.keys().collect();
+            let e_keys: Vec<_> = e.keys().collect();
+            assert_eq!(a_keys, e_keys, "object keys differ at {path}");
+            for (k, ev) in e {
+                assert_json_close(&a[k], ev, &format!("{path}.{k}"));
+            }
+        }
+        (Value::Array(a), Value::Array(e)) => {
+            assert_eq!(a.len(), e.len(), "array length differs at {path}");
+            for (i, (av, ev)) in a.iter().zip(e).enumerate() {
+                assert_json_close(av, ev, &format!("{path}[{i}]"));
+            }
+        }
+        (Value::Number(a), Value::Number(e)) => {
+            let (af, ef) = (a.as_f64().unwrap(), e.as_f64().unwrap());
+            assert!(
+                (af - ef).abs() < 1e-6,
+                "number differs at {path}: actual={af} expected={ef} (diff={})",
+                (af - ef).abs()
+            );
+        }
+        _ => assert_eq!(actual, expected, "value differs at {path}"),
+    }
 }
 
 /// Runs `evaluate` (first model) and `compare` (all models, with
