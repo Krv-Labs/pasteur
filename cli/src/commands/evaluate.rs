@@ -7,7 +7,7 @@ use crate::data::{
     resolve_flip_threshold, LabelSource,
 };
 use crate::io::print_or_write;
-use crate::model::{load_model, load_precomputed};
+use crate::model::{label_names, load_model, load_precomputed};
 
 pub fn run(args: EvaluateArgs) -> Result<()> {
     let task = args.task.into();
@@ -41,7 +41,7 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         (None, [predictions]) => load_precomputed(
             predictions,
             task,
-            inputs.clean_datasets[&inputs.dataset_name].y.width(),
+            &label_names(&inputs.clean_datasets[&inputs.dataset_name].y),
         )?,
         _ => anyhow::bail!(
             "evaluate scores one model: pass --model or a single --predictions (use `compare` \

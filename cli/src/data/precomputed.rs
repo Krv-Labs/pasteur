@@ -25,7 +25,10 @@ impl PrecomputedPredictions {
     /// The label, target and `all_agree` columns `--predictions-out` writes
     /// are skipped, so a single-model predictions file can be fed straight
     /// back in.
-    pub fn from_parquet(path: &Path, task: TaskType, n_outputs: usize) -> Result<Self> {
+    /// Columns are read by position; naming them as the labels in another
+    /// order is refused rather than scored against the wrong class.
+    pub fn from_parquet(path: &Path, task: TaskType, label_names: &[String]) -> Result<Self> {
+        let n_outputs = label_names.len();
         let df = read_parquet(path)?;
         let names: Vec<String> = df
             .get_column_names()
@@ -91,9 +94,21 @@ impl PrecomputedPredictions {
                 );
             }
         }
+        let columns = output_names(names, task);
+        let mut sorted_columns = columns.clone();
+        let mut sorted_labels = label_names.to_vec();
+        sorted_columns.sort();
+        sorted_labels.sort();
+        if columns != label_names && sorted_columns == sorted_labels {
+            anyhow::bail!(
+                "{} has prediction columns {columns:?} but the labels are {label_names:?}; \
+                 columns are read in class order, so put them in the labels' order",
+                path.display()
+            );
+        }
         Ok(Self {
             path: path.to_path_buf(),
-            columns: output_names(names, task),
+            columns,
             rows,
         })
     }
@@ -192,6 +207,32 @@ mod tests {
         dir
     }
 
+    fn labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn label_columns_out_of_class_order_are_refused() {
+        let dir = temp_dir("order");
+        let path = write(
+            &dir,
+            df![
+                SOURCE_ROW_ID_COL => ["1"],
+                VARIANT_NAME_COL => ["clean"],
+                "m__b" => [0.9],
+                "m__a" => [0.1],
+            ]
+            .unwrap(),
+        );
+        let err =
+            PrecomputedPredictions::from_parquet(&path, TaskType::Multiclass, &labels(&["a", "b"]))
+                .err()
+                .unwrap()
+                .to_string();
+        assert!(err.contains("put them in the labels' order"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn rows(variants: &[&str], ids: &[&str]) -> DataFrame {
         df![
             VARIANT_NAME_COL => variants.to_vec(),
@@ -216,7 +257,9 @@ mod tests {
             ]
             .unwrap(),
         );
-        let model = PrecomputedPredictions::from_parquet(&path, TaskType::Multiclass, 2).unwrap();
+        let model =
+            PrecomputedPredictions::from_parquet(&path, TaskType::Multiclass, &labels(&["a", "b"]))
+                .unwrap();
         assert_eq!(model.output_columns(), ["a", "b"]);
         let probs = model
             .predict_proba(&rows(&["blackout", "clean"], &["1", "2"]))
@@ -238,7 +281,9 @@ mod tests {
             ]
             .unwrap(),
         );
-        let model = PrecomputedPredictions::from_parquet(&path, TaskType::Binary, 1).unwrap();
+        let model =
+            PrecomputedPredictions::from_parquet(&path, TaskType::Binary, &labels(&["label"]))
+                .unwrap();
         let err = model
             .predict_proba(&rows(&["clean"], &["3"]))
             .unwrap_err()
@@ -248,10 +293,14 @@ mod tests {
             "{err}"
         );
 
-        let err = PrecomputedPredictions::from_parquet(&path, TaskType::Multiclass, 3)
-            .err()
-            .unwrap()
-            .to_string();
+        let err = PrecomputedPredictions::from_parquet(
+            &path,
+            TaskType::Multiclass,
+            &labels(&["a", "b", "c"]),
+        )
+        .err()
+        .unwrap()
+        .to_string();
         assert!(err.contains("labels have 3 output(s)"), "{err}");
 
         let path = write(
@@ -263,10 +312,11 @@ mod tests {
             ]
             .unwrap(),
         );
-        let err = PrecomputedPredictions::from_parquet(&path, TaskType::Binary, 1)
-            .err()
-            .unwrap()
-            .to_string();
+        let err =
+            PrecomputedPredictions::from_parquet(&path, TaskType::Binary, &labels(&["label"]))
+                .err()
+                .unwrap()
+                .to_string();
         assert!(err.contains("more than one row"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

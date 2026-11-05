@@ -7,7 +7,7 @@ use crate::data::{
     flipper_feature_order_from_inputs, resolve_flip_threshold, LabelSource,
 };
 use crate::io::{print_or_write, write_predictions_parquet};
-use crate::model::{load_model, load_precomputed, LoadedModel};
+use crate::model::{label_names, load_model, load_precomputed, LoadedModel};
 
 pub fn run(args: CompareArgs) -> Result<()> {
     let task = args.task.into();
@@ -29,8 +29,8 @@ pub fn run(args: CompareArgs) -> Result<()> {
     apply_oracle_labels(&mut inputs, &args.oracle)?;
 
     let feature_order = flipper_feature_order_from_inputs(&inputs, &args.sim_type);
-    let n_outputs = inputs.clean_datasets[&inputs.dataset_name].y.width();
-    let models = load_models(&args, &feature_order, n_outputs)?;
+    let label_names = label_names(&inputs.clean_datasets[&inputs.dataset_name].y);
+    let models = load_models(&args, &feature_order, &label_names)?;
     let model_refs: Vec<(String, &dyn Model)> = models
         .iter()
         .map(|m| (m.label.clone(), m.model.as_ref()))
@@ -59,7 +59,7 @@ pub fn run(args: CompareArgs) -> Result<()> {
 fn load_models(
     args: &CompareArgs,
     feature_order: &[String],
-    n_outputs: usize,
+    label_names: &[String],
 ) -> Result<Vec<LoadedModel>> {
     let mut models: Vec<LoadedModel> =
         Vec::with_capacity(args.models.len() + args.predictions.predictions.len());
@@ -77,7 +77,7 @@ fn load_models(
         models.push(model);
     }
     for source in &args.predictions.predictions {
-        let model = load_precomputed(source, args.task.into(), n_outputs)?;
+        let model = load_precomputed(source, args.task.into(), label_names)?;
         check_comparable(&models, &model)?;
         models.push(model);
     }

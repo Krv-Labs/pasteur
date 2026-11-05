@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use pasteur_core::{Model, TaskType};
 use pasteur_model::OnnxModel;
+use polars::prelude::DataFrame;
 
 use crate::args::PredictionsSource;
 use crate::data::PrecomputedPredictions;
@@ -52,16 +53,17 @@ pub fn load_model(
     })
 }
 
-/// `n_outputs` is the number of label columns the predictions must match.
+/// `label_names` are the label columns, in class order, the predictions
+/// must match.
 pub fn load_precomputed(
     source: &PredictionsSource,
     task: TaskType,
-    n_outputs: usize,
+    label_names: &[String],
 ) -> Result<LoadedModel> {
     if !source.path.exists() {
         anyhow::bail!("predictions not found at {}", source.path.display());
     }
-    let model = PrecomputedPredictions::from_parquet(&source.path, task, n_outputs)?;
+    let model = PrecomputedPredictions::from_parquet(&source.path, task, label_names)?;
     Ok(LoadedModel {
         label: source
             .label
@@ -70,6 +72,11 @@ pub fn load_precomputed(
         output_columns: model.output_columns().to_vec(),
         model: Box::new(model),
     })
+}
+
+/// Label column names, in class order.
+pub fn label_names(y: &DataFrame) -> Vec<String> {
+    y.get_column_names().iter().map(|s| s.to_string()).collect()
 }
 
 pub fn model_label(model_path: &Path) -> String {
