@@ -529,6 +529,8 @@ fn simulate_and_evaluate_sweep() {
     ]);
     assert!(!err.status.success());
     assert!(String::from_utf8_lossy(&err.stderr).contains("--sweep-range"));
+    // A bad --sweep fails before any variant is written.
+    assert!(!root.join("bad").join("clean").exists());
     let _ = fs::remove_dir_all(&root);
 }
 

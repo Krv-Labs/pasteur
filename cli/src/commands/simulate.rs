@@ -22,6 +22,9 @@ pub fn run(args: SimulateArgs) -> Result<()> {
         provenance
     );
 
+    // Built first so a bad --sweep fails before any variant is written.
+    let sweep = build_sweep(&args, &features, source_row_id.as_materialized_series())?;
+
     write_variant(
         &args.output,
         "clean",
@@ -32,7 +35,9 @@ pub fn run(args: SimulateArgs) -> Result<()> {
     run_blackout(&args, &features, &source_row_id, &row_ordinal)?;
     run_jitter_iters(&args, &features, &source_row_id, &row_ordinal)?;
     run_flipper(&args, &features, source_row_id.as_materialized_series())?;
-    run_sweep(&args, &features, source_row_id.as_materialized_series())?;
+    if let Some(sweep) = sweep {
+        write_variant(&args.output, "sweep", "sweep", &sweep)?;
+    }
 
     layout::validate_sim_bundle(&args.output)
         .context("simulation output failed layout validation")?;
@@ -188,8 +193,12 @@ fn run_flipper(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series
     write_variant(&args.output, "flipper", "flipper", &out)
 }
 
-/// Writes the single-feature sweep grid when `--sweep` names a feature.
-fn run_sweep(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series) -> Result<()> {
+/// Builds the single-feature sweep grid when `--sweep` names a feature.
+fn build_sweep(
+    args: &SimulateArgs,
+    features: &DataFrame,
+    source_row_id: &Series,
+) -> Result<Option<DataFrame>> {
     let sweep = &args.sweep;
     if sweep.features.is_empty() {
         if sweep.sweep_range.is_some()
@@ -198,7 +207,7 @@ fn run_sweep(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series) 
         {
             anyhow::bail!("--sweep-range, --sweep-relative-to and --sweep-near need --sweep");
         }
-        return Ok(());
+        return Ok(None);
     }
     let range = sweep
         .sweep_range
@@ -236,12 +245,7 @@ fn run_sweep(args: &SimulateArgs, features: &DataFrame, source_row_id: &Series) 
         near: sweep.sweep_near,
     };
     let grid = SweepSimulator::new(config).generate(features)?;
-    write_variant(
-        &args.output,
-        "sweep",
-        "sweep",
-        &with_sweep_ids(&grid, source_row_id)?,
-    )
+    with_sweep_ids(&grid, source_row_id).map(Some)
 }
 
 /// `source_row_id` is `sweep_<case id>_<feature>_step_<n>`.
