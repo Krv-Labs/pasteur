@@ -531,6 +531,24 @@ fn simulate_and_evaluate_sweep() {
     assert!(String::from_utf8_lossy(&err.stderr).contains("--sweep-range"));
     // A bad --sweep fails before any variant is written.
     assert!(!root.join("bad").join("clean").exists());
+
+    let err = run_cli(&[
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        root.join("dup").to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--sweep",
+        "f1=1",
+        "--sweep",
+        "f1=2",
+        "--sweep-range",
+        "0:2",
+    ]);
+    assert!(!err.status.success());
+    assert!(String::from_utf8_lossy(&err.stderr).contains("more than once"));
     let _ = fs::remove_dir_all(&root);
 }
 

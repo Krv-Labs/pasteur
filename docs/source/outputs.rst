@@ -55,10 +55,10 @@ before model scoring.
 Sweep metadata
 --------------
 
-Sweep output (written when ``simulate`` receives ``--sweep-features``) also
-contains ``sweep_feature``, ``sweep_cutoff`` (nullable), ``sweep_path_id``,
-``sweep_step``, and ``sweep_value``. ``source_row_id`` is formatted as
-``sweep_{feature}_{path_id}_{step}``.
+Sweep output (written when ``simulate`` receives ``--sweep``) also contains
+``sweep_case_row`` (the clean row each path starts from), ``sweep_feature``,
+``sweep_cutoff`` (nullable), ``sweep_step``, and ``sweep_value``.
+``source_row_id`` is formatted as ``sweep_<case id>_<feature>_step_<n>``.
 
 Evaluation JSON
 ---------------

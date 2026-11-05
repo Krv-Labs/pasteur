@@ -236,7 +236,14 @@ fn build_sweep(
                 cutoff,
             })
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<Vec<SweepFeature>>>()?;
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = features_to_sweep.iter().find(|f| !seen.insert(&f.name)) {
+        anyhow::bail!(
+            "--sweep names {:?} more than once; its grid rows would share ids",
+            dup.name
+        );
+    }
     let config = SweepConfig {
         features: features_to_sweep,
         range: (lo, hi),
