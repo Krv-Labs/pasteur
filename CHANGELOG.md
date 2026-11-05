@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0
+
 ### Added
 
 - `evaluate` and `compare` take `--predictions [NAME=]PATH`: predictions
