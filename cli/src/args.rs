@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pasteur_core::TaskType;
@@ -20,9 +20,11 @@ pub enum Command {
     Simulate(SimulateArgs),
     /// Write a Hugging Face dataset card (README.md) for a simulation bundle.
     Card(CardArgs),
-    /// Score one local ONNX model against a local simulation bundle.
+    /// Score one local ONNX model, or precomputed predictions, against a local
+    /// simulation bundle.
     Evaluate(EvaluateArgs),
-    /// Score multiple local ONNX models side by side; optionally write predictions parquet.
+    /// Score ONNX models and precomputed predictions side by side; optionally
+    /// write predictions parquet.
     Compare(CompareArgs),
     /// List, remove, or clear the local Pasteur staging cache.
     Cache(CacheArgs),
@@ -67,6 +69,60 @@ pub struct TargetArgs {
     /// clean input's --id-col values.
     #[arg(long, default_value = "node_id")]
     pub targets_id_col: String,
+}
+
+/// Models scored outside Pasteur.
+#[derive(clap::Args, Clone)]
+pub struct PredictionsArgs {
+    /// Precomputed predictions parquet, in place of an ONNX model: one row per
+    /// evaluated row, keyed by `variant_name` and `source_row_id`, plus one
+    /// Float64 column per output (one for binary and regression, one per class
+    /// in class order for multiclass and multilabel). A single-model
+    /// `--predictions-out` file is accepted as-is. The model is named after
+    /// the file stem; `NAME=PATH` names it. `compare` takes it repeatedly.
+    #[arg(long = "predictions", value_name = "[NAME=]PATH", value_parser = parse_predictions)]
+    pub predictions: Vec<PredictionsSource>,
+}
+
+/// One `--predictions` value.
+#[derive(Clone, Debug)]
+pub struct PredictionsSource {
+    pub label: Option<String>,
+    pub path: PathBuf,
+}
+
+/// `NAME=PATH`, or a bare path; an existing file whose name holds `=` is
+/// taken as a path.
+fn parse_predictions(value: &str) -> Result<PredictionsSource, String> {
+    match value.split_once('=') {
+        Some((label, path)) if !label.is_empty() && !Path::new(value).exists() => {
+            Ok(PredictionsSource {
+                label: Some(label.to_string()),
+                path: path.into(),
+            })
+        }
+        _ => Ok(PredictionsSource {
+            label: None,
+            path: value.into(),
+        }),
+    }
+}
+
+/// Per-row true labels for decision models, whose correct answer can change
+/// under a perturbation.
+#[derive(clap::Args)]
+pub struct OracleArgs {
+    /// Local parquet with the correct label for every simulated row: the row
+    /// key `source_row_id`, `variant_name` (as `compare --predictions-out`
+    /// writes it), and the label columns Pasteur derives from --labels
+    /// (`label` for binary, `group_<id>` per class or label). Replaces the
+    /// labels copied from the clean row and adds the `oracle` section.
+    #[arg(long)]
+    pub oracle_labels: Option<PathBuf>,
+    /// The model's output class meaning "cannot decide" (e.g.
+    /// `cannot_determine`). Adds blackout abstention metrics.
+    #[arg(long, requires = "oracle_labels")]
+    pub abstain_class: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -167,8 +223,33 @@ pub struct SimulateArgs {
     pub flipper_pairs: usize,
     #[arg(long, default_value_t = 20)]
     pub flipper_steps: usize,
+    #[command(flatten)]
+    pub sweep: SweepArgs,
     #[arg(long, default_value = "output")]
     pub output: PathBuf,
+}
+
+/// The single-feature sweep grid. Without `--sweep`, `simulate` skips it.
+#[derive(clap::Args)]
+pub struct SweepArgs {
+    /// Feature to sweep, optionally with its cutoff (`feature=cutoff`).
+    /// Repeatable, one grid per feature.
+    #[arg(long = "sweep", value_name = "FEATURE[=CUTOFF]")]
+    pub features: Vec<String>,
+    /// Grid range `lo:hi`: absolute, or a multiplier of each feature's
+    /// cutoff when --sweep-relative-to is set. Required with --sweep.
+    #[arg(long, value_name = "LO:HI", allow_hyphen_values = true)]
+    pub sweep_range: Option<String>,
+    /// Makes --sweep-range relative, and is the cutoff for every --sweep
+    /// feature that does not give its own.
+    #[arg(long, value_name = "CUTOFF")]
+    pub sweep_relative_to: Option<f64>,
+    /// Grid points over --sweep-range, both ends included.
+    #[arg(long, default_value_t = 25)]
+    pub sweep_steps: usize,
+    /// Adds --sweep-steps more points within ±FRAC of the cutoff (e.g. 0.1).
+    #[arg(long, value_name = "FRAC")]
+    pub sweep_near: Option<f64>,
 }
 
 #[derive(clap::Args)]
@@ -206,8 +287,14 @@ pub struct EvaluateArgs {
     pub labels: Option<PathBuf>,
     #[command(flatten)]
     pub targets: TargetArgs,
-    #[arg(long)]
-    pub model: PathBuf,
+    #[arg(
+        long,
+        required_unless_present = "predictions",
+        conflicts_with = "predictions"
+    )]
+    pub model: Option<PathBuf>,
+    #[command(flatten)]
+    pub predictions: PredictionsArgs,
     /// Model contract sidecar (`metadata.json`). Defaults to
     /// `{model_dir}/metadata.json`; pass an explicit path when the ONNX and
     /// contract live in different directories (e.g. a separate model registry).
@@ -242,6 +329,8 @@ pub struct EvaluateArgs {
     /// target's units, has no default, and must match `simulate`'s.
     #[arg(long)]
     pub flip_threshold: Option<f64>,
+    #[command(flatten)]
+    pub oracle: OracleArgs,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
@@ -257,8 +346,10 @@ pub struct CompareArgs {
     pub labels: Option<PathBuf>,
     #[command(flatten)]
     pub targets: TargetArgs,
-    #[arg(long = "model", required = true)]
+    #[arg(long = "model", required_unless_present = "predictions")]
     pub models: Vec<PathBuf>,
+    #[command(flatten)]
+    pub predictions: PredictionsArgs,
     /// Model contract sidecar (`metadata.json`). Defaults to
     /// `{model_dir}/metadata.json`; pass an explicit path when the ONNX and
     /// contract live in different directories (e.g. a separate model registry).
@@ -293,6 +384,8 @@ pub struct CompareArgs {
     /// target's units, has no default, and must match `simulate`'s.
     #[arg(long)]
     pub flip_threshold: Option<f64>,
+    #[command(flatten)]
+    pub oracle: OracleArgs,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
     /// Local path for per-patient predictions parquet (agent uploads with `hf`).

@@ -46,6 +46,7 @@ fn run(
         metrics: vec![],
         flip_threshold,
         task,
+        oracle: None,
     };
     let clean_datasets = HashMap::from([("d".to_string(), clean)]);
     let simulation_variants = variants

@@ -72,6 +72,23 @@ Important options:
    * - ``--flipper-steps``
      - ``20``
      - Interpolation steps per flipper pair
+   * - ``--sweep``
+     - none
+     - Feature to sweep, as ``feature`` or ``feature=cutoff``. Repeatable.
+       Enables the sweep grid
+   * - ``--sweep-range``
+     - required with ``--sweep``
+     - Grid range ``lo:hi``, absolute or relative to the cutoff
+   * - ``--sweep-relative-to``
+     - none
+     - Makes ``--sweep-range`` a multiplier of each feature's cutoff, and is
+       the cutoff for features that do not give one
+   * - ``--sweep-steps``
+     - ``25``
+     - Grid points over ``--sweep-range``, both ends included
+   * - ``--sweep-near``
+     - none
+     - Adds ``--sweep-steps`` more points within ±this fraction of the cutoff
    * - ``--random-state``
      - ``42``
      - Random seed
@@ -79,6 +96,7 @@ Important options:
 The defaults for ``--id-col``, ``--feature``, and ``--positive-group-id``
 come from the example thyroid dataset. Always pass them for your own data.
 ``--jitter-scale`` is in units of the feature's standard deviation.
+See :doc:`simulations` for how the sweep grid is built.
 
 card
 ----
@@ -109,7 +127,8 @@ Score one local ONNX model:
      --model ./models/model.onnx \
      --output ./scores.json
 
-The positional simulation type can be ``blackout``, ``jitter``, or ``flipper``.
+The positional simulation type can be ``blackout``, ``jitter``, ``flipper``, or
+``sweep`` (classifiers only).
 Each run loads only that folder; see :doc:`metrics` for which metric to read
 from each.
 
@@ -133,8 +152,12 @@ from each.
      - ``node_id``
      - ID column of ``--targets``, matched as text
    * - ``--model``
-     - required
+     - one of these
      - Local ``.onnx`` file
+   * - ``--predictions``
+     - one of these
+     - Precomputed predictions parquet, ``PATH`` or ``NAME=PATH``; see
+       `Scoring models outside Pasteur`_. Cannot be combined with ``--model``
    * - ``--positive-group-id``
      - ``103``
      - Group treated as the positive cohort. Repeat once per model output,
@@ -157,10 +180,20 @@ from each.
        class. Rejected for multiclass, multilabel and regression models
    * - ``--flip-threshold``
      - ``0.5``
-     - Decision threshold used by flipper stability. Multilabel: applies to
+     - Decision threshold used by flipper and sweep. Multilabel: applies to
        labels without a contract threshold. Unused for multiclass (argmax).
        Regression: the clinical cutoff in target units, with no default;
        required for ``evaluate flipper`` and must match ``simulate``'s
+   * - ``--oracle-labels``
+     - none
+     - Parquet with the correct label for every simulated row, for models
+       whose right answer can change under a perturbation. Adds the
+       ``oracle`` section; see :ref:`oracle-labels`. Classifiers only
+   * - ``--abstain-class``
+     - none
+     - Needs ``--oracle-labels``. The model's output class that means
+       "cannot decide", e.g. ``cannot_determine``. Adds blackout abstention
+       metrics
    * - ``-o``, ``--output``
      - stdout
      - Write the JSON result to a file. The directory must already exist.
@@ -180,8 +213,9 @@ Score multiple models over the same variants:
      --predictions-out ./predictions/blackout.parquet \
      --output ./comparison.json
 
-``compare`` takes the same options as ``evaluate``. ``--model`` is repeatable.
-Models are labelled by file name, so give each one a different name
+``compare`` takes the same options as ``evaluate``. ``--model`` and
+``--predictions`` are both repeatable and can be mixed; at least one model is
+required. Models are labelled by file name, so give each one a different name
 (``a.onnx``, ``b.onnx``); two files both called ``model.onnx`` collide.
 ``--predictions-out`` writes one probability column per model plus
 ``all_agree``. A single ``--contract`` applies to every model.
@@ -218,6 +252,53 @@ cutoff for flipper to both commands:
 ``--predictions-out`` then writes ``target`` and one prediction column per
 model. ``all_agree`` is true when every model puts the patient on the same
 side of the cutoff, and null when no ``--flip-threshold`` is given.
+
+Scoring models outside Pasteur
+------------------------------
+
+A model that is not ONNX (an LLM, a rule engine, a model behind a service) can
+be scored in its own harness and evaluated from its predictions. Pass
+``--predictions`` in place of ``--model``:
+
+.. code-block:: bash
+
+   pasteur-cli compare jitter \
+     --sim-root ./sim \
+     --labels ./labels/groups.parquet \
+     --model ./models/a.onnx \
+     --predictions ./predictions/rules.parquet \
+     --predictions llm=./predictions/run_7.parquet
+
+The parquet holds one row for every row Pasteur evaluates, across ``clean``
+and every variant of the simulation type:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Column
+     - Content
+   * - ``variant_name``
+     - Text: the variant file stem (``clean``, ``blackout``, ``jitter_0``,
+       ``flipper``, ...)
+   * - ``source_row_id``
+     - Text: the row's ``source_row_id`` in that variant's parquet
+   * - one per output
+     - Float64. Binary: the positive-class probability. Regression: the
+       prediction. Multiclass and multilabel: one column per class, in class
+       order, named by class
+
+To find the rows to score, read ``source_row_id`` from ``<sim-root>/clean``
+and from each variant parquet, or run ``compare --predictions-out`` once with
+any model. A ``--predictions-out`` file from a single model is accepted as it
+is: its label, target and ``all_agree`` columns are ignored, and a
+``<model>__`` prefix shared by every class column is dropped.
+
+The model is labelled by the file stem; ``NAME=PATH`` sets the label. A
+missing row, a duplicate row, a null prediction or the wrong number of output
+columns is an error; nothing is filled in. ``--contract``, ``--input-name``,
+``--null-fill`` and ``--positive-class-index`` apply only to ONNX models, and
+multilabel predictions are thresholded at ``--flip-threshold``.
 
 cache
 -----

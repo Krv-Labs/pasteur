@@ -60,6 +60,7 @@ fn test_full_pipeline() -> Result<(), CoreError> {
         metrics: vec!["roc_auc".to_string()],
         flip_threshold: 0.5,
         task: TaskType::Binary,
+        oracle: None,
     };
 
     let model = MockModel;
@@ -138,6 +139,7 @@ fn test_flipper_evaluation() -> Result<(), CoreError> {
         metrics: vec!["roc_auc".to_string()],
         flip_threshold: 0.5,
         task: TaskType::Binary,
+        oracle: None,
     };
     let result = eval.run(
         &ThresholdModel,

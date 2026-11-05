@@ -65,6 +65,8 @@ the matching metric from each run:
      - ``jitter_stability`` (needs ``--jitter-iters`` of 2 or more)
    * - ``evaluate flipper``
      - ``flipper_stability``
+   * - ``evaluate sweep``
+     - ``sweep`` (see `Sweep`_)
 
 **ROC AUC needs both classes.** If the clean cohort has no positive rows,
 or no negative rows, ROC AUC is reported as 0.5 rather than as an error.
@@ -99,9 +101,10 @@ Per-patient predictions
    * - Column
      - Meaning
    * - ``source_row_id``
-     - The patient's original ID (synthetic path ID for flipper rows)
+     - The patient's original ID (synthetic path ID for flipper and sweep
+       rows)
    * - ``variant_name``
-     - ``clean``, ``blackout``, ``jitter_0`` … , or ``flipper``
+     - ``clean``, ``blackout``, ``jitter_0`` … , ``flipper``, or ``sweep``
    * - ``label``
      - 1 if the patient is in the positive group, else 0
    * - one column per model
@@ -184,6 +187,65 @@ grids store the label index in ``pair_label``. Evaluating a grid built for a
 different task is an error. Evaluating one built with the same task but
 different groups is not detected.
 
+Sweep
+-----
+
+``evaluate sweep`` adds a ``sweep`` list to the JSON, one entry per swept
+feature. A *path* is one source row swept over one feature. The model's
+decision at each step is the positive class at or over ``--flip-threshold``
+(binary), the argmax class (multiclass), or the set of labels at or over their
+thresholds (multilabel). A *flip* is a step where the decision differs from
+the step before, and its *flip value* is the midpoint of the two bracketing
+grid values. Sweep is scored for classifiers only.
+
+The full metrics compare the model with an **oracle**: the correct decision
+for every grid row, because moving a feature across its cutoff can change the
+correct answer. Pass it with ``--oracle-labels`` (see `Oracle labels`_),
+covering the ``clean`` and ``sweep`` rows. Rates are shares of paths.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Definition
+   * - ``boundary_offset``
+     - Median, ``q25`` and ``q75`` of ``(model flip value − oracle flip
+       value) / |cutoff|``, over monotonic paths. 0 means the model's boundary
+       is where the true one is; positive means it flips later on the grid.
+       Quartiles here, in ``model_flip_value`` and in ``oracle.flipper``
+       interpolate linearly between sorted values (numpy's default).
+       ``boundary_offset_units`` is the same in the feature's units. Null
+       without a cutoff (for the relative form) or without monotonic paths.
+   * - ``monotonic_rate``
+     - Paths where the model and the oracle each flip exactly once, to the
+       same decision. Higher is better.
+   * - ``never_flipped``
+     - Among paths where the oracle flips, the share where the model never
+       does. Read it as "ignores this feature". Lower is better.
+   * - ``extra_flips_rate``
+     - Paths where the model flips more than once. A model that reads digit
+       patterns rather than magnitudes flips back and forth. Lower is better.
+   * - ``accuracy``, ``accuracy_by_step``
+     - Accuracy against the oracle over every grid row, and at each step
+       (with that step's ``value``). The dip around the cutoff shows how wide
+       the model's uncertain band is.
+   * - ``model_flip_value``
+     - Median and quartiles of the model's flip value, in feature units, over
+       paths where it flips exactly once.
+
+**Without oracle labels the output is descriptive.** Without
+``--oracle-labels``, ``oracle`` is ``false`` and only ``model_flip_value``,
+``extra_flips_rate`` and ``never_flipped`` are filled. ``never_flipped`` then
+counts every path whose decision never changes, so both ends of the grid get
+the same answer. A model may be right not to flip: read it against a range
+that you know crosses the cutoff. ``boundary_offset``, ``monotonic_rate`` and
+the accuracies are ``null``.
+
+**The grid limits the resolution.** Flip values are grid midpoints, so an
+offset is exact only to within one grid step. Use ``--sweep-near`` to add
+points close to the cutoff.
+
 Regression models
 -----------------
 
@@ -254,6 +316,115 @@ crossed for well-fitted models, and those pairs dominate the mean.
 **Jitter depends on the cohort.** Because jitter is scaled by the target's
 variance in the clean cohort, compare jitter stability between models on the
 same cohort only.
+
+.. _oracle-labels:
+
+Oracle labels
+-------------
+
+Every metric above assumes a perturbation keeps the patient's label: a
+jittered or blacked-out row is scored against the clean row's label. For a
+*decision model* (a rule pack, an encoder or an LLM answering "eligible / not
+eligible / cannot determine") that is often wrong. Moving a lab value across a
+criterion's threshold should change the answer, and removing it may make the
+right answer "cannot determine".
+
+``--oracle-labels`` supplies the correct label for **every simulated row**,
+computed by your own oracle (for example the rule engine or generator that
+made the case). The file is a parquet with one row per simulated row:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Column
+     - Meaning
+   * - ``variant_name``
+     - ``clean``, ``blackout``, ``jitter_0`` … , ``flipper``, or ``sweep``: the
+       parquet file stem, as ``compare --predictions-out`` writes it
+   * - ``source_row_id``
+     - The row's ID; ``pair_<id>_step_<n>`` for flipper rows,
+       ``sweep_<case>_<feature>_step_<n>`` for sweep rows
+   * - ``label``
+     - Binary: 1 or 0
+   * - ``group_<id>``
+     - Multiclass and multilabel, one per ``--positive-group-id`` in the same
+       order: a one-hot (multiclass) or multi-hot (multilabel) 0/1 row
+
+It replaces the labels of every variant, ``clean`` included, so it must cover
+every row of the clean data and of the simulation type being evaluated. A
+missing row is an error. Other columns are ignored, and so are rows for
+variants not loaded, so one file can serve every simulation type. Regression
+is not supported.
+
+The labels ``--predictions-out`` writes then come from the oracle too.
+
+With oracle labels the JSON gains an ``oracle`` section. All of it compares
+**decisions**, not probabilities: ``p ≥ --flip-threshold`` for binary, the
+argmax for multiclass, and the set of labels at or over threshold for
+multilabel.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Field
+     - Definition and reading
+   * - ``oracle.accuracy.<variant>``
+     - Share of rows whose decision equals the oracle label, per variant
+       (``clean``, ``blackout``, ``jitter_0`` …, ``flipper``, ``sweep``).
+       Multilabel
+       counts a row as correct only when every label matches. Under blackout
+       this is the accuracy against the oracle's answer for the row with the
+       feature missing, which may itself be "cannot determine".
+   * - ``oracle.jitter.flip_rate_label_preserved``
+     - Over every (row, jitter draw) where the oracle label is the same as on
+       the clean row: the share where the model's decision changed anyway.
+       **Lower is better**; this is instability the truth does not justify.
+   * - ``oracle.jitter.flip_rate_label_changed``
+     - Over every (row, jitter draw) where the oracle label changed: the
+       share where the model's decision changed *to the new label*. **Higher
+       is better**; it is the model following the truth.
+   * - ``oracle.jitter.n_label_preserved``, ``n_label_changed``
+     - The denominators. A rate is ``null`` when its count is 0.
+   * - ``oracle.flipper.boundary_error_median``, ``boundary_error_iqr``
+     - For each pair, ``flip_t − oracle_flip_t``: where the model's decision
+       flips along the path minus where the oracle's does. Median and
+       interquartile range (``q75 − q25``, linearly interpolated) over the
+       pairs where both flip
+       (``n_pairs_compared``). 0 means the model's boundary is where the true
+       one is; negative means the model flips early, positive late.
+   * - ``oracle.flipper.oracle_never_flipped``
+     - Share of pairs whose oracle label never changes along the path.
+       Those pairs have no true boundary to compare against.
+   * - ``oracle.abstain``
+     - With ``--abstain-class``, on blackout rows.
+       ``abstain_when_missing``: of the rows where the oracle abstains, the
+       share where the model abstains too (higher is better).
+       ``decided_when_missing``: the share where it chose another class
+       instead. ``confusion`` holds the four row counts
+       ``oracle_<abstain|decided>_model_<abstain|decided>``;
+       ``oracle_decided_model_abstain`` is the model abstaining when the
+       oracle could decide.
+
+**Where the oracle flips.** Oracle labels are 0/1, so ``oracle_flip_t`` lands
+halfway between the last grid step before the change and the first one
+after. With ``--flipper-steps 20`` that is within 1/38 of the true crossing;
+add steps when the boundary error you care about is smaller than that.
+The model's ``flip_t`` is interpolated from its probabilities as for
+``flipper_stability``. Multiclass uses the same ``p[b] − p[a]`` rule for both,
+so an oracle label of a third class counts as the ``b`` side.
+
+**Pairs where only one side flips.** A pair where the model flips but the
+oracle does not, or the reverse, is left out of ``boundary_error``. Read
+``oracle_never_flipped`` and ``n_pairs_compared`` beside it.
+
+**Jitter rates pool draws.** Each (row, draw) counts once, against the clean
+row. A row that flips in two draws counts twice.
+
+**The abstain class is matched by name** against the model's
+``output.classes``, and must be one of them. It applies to multiclass and
+multilabel models; a binary model has no class to abstain with.
 
 What these numbers do not show
 ------------------------------

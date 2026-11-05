@@ -47,12 +47,35 @@ pub struct FlipperConfig {
     pub random_state: Option<u64>,
 }
 
+/// One feature to sweep and, optionally, its decision cutoff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SweepFeature {
+    pub name: String,
+    pub cutoff: Option<f64>,
+}
+
+/// Sets one feature at a time to each value of a grid, holding the rest of
+/// the row fixed. The grid is `n_steps` points over `range`, absolute by
+/// default. With `relative_to` set, the range is a multiplier of each
+/// feature's cutoff: its own `cutoff` if given, else `relative_to`. `near`
+/// adds `n_steps` more points within ±`near` (a fraction) of the cutoff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SweepConfig {
+    pub features: Vec<SweepFeature>,
+    pub range: (f64, f64),
+    pub relative_to: Option<f64>,
+    pub n_steps: usize,
+    pub near: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SimulationConfig {
     pub blackout: Option<BlackoutConfig>,
     pub jitter: Option<JitterConfig>,
     pub cohort: Option<CohortConfig>,
     pub flipper: Option<FlipperConfig>,
+    #[serde(default)]
+    pub sweep: Option<SweepConfig>,
 }
 
 /// What a model's output means. Binary models emit one positive-class
@@ -111,6 +134,10 @@ pub struct EvaluationConfig {
     pub flip_threshold: f64,
     #[serde(default)]
     pub task: TaskType,
+    /// Set when every variant's `y` holds per-row oracle labels rather than
+    /// a copy of the clean row's label; turns on `EvaluationResult::oracle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle: Option<crate::evaluate::OracleConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +171,14 @@ pub struct EvaluationResult {
     /// Regression detail, in the target's units. Absent for classifiers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression: Option<RegressionScores>,
+    /// Metrics against per-row oracle labels (`--oracle-labels`). Absent
+    /// without them, so the output is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle: Option<crate::evaluate::OracleScores>,
+    /// Single-feature sweep metrics, one entry per swept feature. Present
+    /// only when a `sweep` variant was scored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<Vec<crate::evaluate::SweepScores>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

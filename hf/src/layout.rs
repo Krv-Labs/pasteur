@@ -3,6 +3,17 @@ use std::path::{Path, PathBuf};
 
 pub const SOURCE_ROW_ID_COL: &str = "source_row_id";
 pub const ROW_ORDINAL_COL: &str = "row_ordinal";
+/// Name of the variant a row was scored in: `clean`, `blackout`,
+/// `jitter_<i>`, `flipper` or `sweep` (the parquet file stem).
+pub const VARIANT_NAME_COL: &str = "variant_name";
+/// Identifies one scored row across a whole evaluation: `(variant_name,
+/// source_row_id)`. Every evaluation `x` frame carries both columns, and
+/// `compare --predictions-out` writes them, so per-row files (predictions,
+/// oracle labels) join on this key. `source_row_id` alone repeats across
+/// variants; flipper and sweep ids already encode the path
+/// (`pair_<id>_step_<n>`, `sweep_<case>_<feature>_step_<n>`).
+/// Neither column is a model feature.
+pub const ROW_KEY_COLS: [&str; 2] = [VARIANT_NAME_COL, SOURCE_ROW_ID_COL];
 
 /// Lists immediate child directories under `root` (simulation-type folders).
 pub fn list_sim_types(root: &Path) -> Result<Vec<String>, CoreError> {

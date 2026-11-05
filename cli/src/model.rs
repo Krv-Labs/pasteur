@@ -1,8 +1,20 @@
 use std::path::Path;
 
 use anyhow::Result;
-use pasteur_core::TaskType;
+use pasteur_core::{Model, TaskType};
 use pasteur_model::OnnxModel;
+use polars::prelude::DataFrame;
+
+use crate::args::PredictionsSource;
+use crate::data::PrecomputedPredictions;
+
+/// A model to score, ONNX or precomputed, with the name reports key it by
+/// and its output column names in class order.
+pub struct LoadedModel {
+    pub label: String,
+    pub output_columns: Vec<String>,
+    pub model: Box<dyn Model>,
+}
 
 pub fn load_model(
     model_path: &Path,
@@ -12,7 +24,7 @@ pub fn load_model(
     null_fill: Option<f32>,
     contract: Option<&Path>,
     task: TaskType,
-) -> Result<OnnxModel> {
+) -> Result<LoadedModel> {
     if !model_path.exists() {
         anyhow::bail!(
             "model not found at {} (download with `hf download` first)",
@@ -34,7 +46,37 @@ pub fn load_model(
             model.task()
         );
     }
-    Ok(model)
+    Ok(LoadedModel {
+        label: model_label(model_path),
+        output_columns: model.output_columns().to_vec(),
+        model: Box::new(model),
+    })
+}
+
+/// `label_names` are the label columns, in class order, the predictions
+/// must match.
+pub fn load_precomputed(
+    source: &PredictionsSource,
+    task: TaskType,
+    label_names: &[String],
+) -> Result<LoadedModel> {
+    if !source.path.exists() {
+        anyhow::bail!("predictions not found at {}", source.path.display());
+    }
+    let model = PrecomputedPredictions::from_parquet(&source.path, task, label_names)?;
+    Ok(LoadedModel {
+        label: source
+            .label
+            .clone()
+            .unwrap_or_else(|| model_label(&source.path)),
+        output_columns: model.output_columns().to_vec(),
+        model: Box::new(model),
+    })
+}
+
+/// Label column names, in class order.
+pub fn label_names(y: &DataFrame) -> Vec<String> {
+    y.get_column_names().iter().map(|s| s.to_string()).collect()
 }
 
 pub fn model_label(model_path: &Path) -> String {
