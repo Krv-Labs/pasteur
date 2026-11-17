@@ -4,6 +4,13 @@
 
 ### Added
 
+- npm package `@krv-labs/pasteur`: a prebuilt CLI for macOS, Linux and
+  Windows, run with `npx -y @krv-labs/pasteur` or installed as `pasteur-cli`
+  (alias `pasteur`). The same binaries are attached to each GitHub release.
+- Claude Code plugin (`/plugin marketplace add Krv-Labs/pasteur`, then
+  `/plugin install pasteur@pasteur`): a Pasteur skill and a
+  `/pasteur:robustness` command that runs scramble and unit-conversion
+  checks on one feature of an ONNX model.
 - Scramble simulator (`simulate --scramble-rate`, `--scramble-encoding`):
   re-encodes a seeded share of `--feature` rows as messy export text
   (`5,2`, `<0.01`, `5.2 mg/dL`, `-999`). Writes `scramble/`.

@@ -5,8 +5,11 @@ Local-only CLI for Pasteur tabular simulation and evaluation. It makes **no netw
 Install:
 
 ```bash
-cargo install pasteur-cli
+npx -y @krv-labs/pasteur --help   # prebuilt; or npm install -g @krv-labs/pasteur
+cargo install pasteur-cli         # build from source
 ```
+
+The npm package `@krv-labs/pasteur` (Node.js ≥ 18) installs the same binary as `pasteur-cli` and `pasteur`; prebuilt binaries are also on each [GitHub release](https://github.com/Krv-Labs/pasteur/releases). For Claude Code, see the [plugin install](../docs/source/installation.rst).
 
 Input schemas (clean parquet, labels table) are documented in [Data Contracts](../docs/source/data-contracts.rst). For security and data handling, see [Security](../docs/source/security.rst).
 
