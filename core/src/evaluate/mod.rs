@@ -121,10 +121,12 @@ impl Evaluator {
                     Some((variant_name.clone(), variant.clone()))
                 })
                 .collect();
-            for (variant_name, variant) in &dataset_variants {
+            // Only the stress variant can carry re-encoded text; flipper grids
+            // keep id columns like `pair_0_step_3` that would count as lost.
+            if let Some((variant_name, variant)) = stress_variant(&dataset_variants)? {
                 for (column, lost) in parse_loss(&variant.x) {
                     *parse_losses
-                        .entry(variant_name.clone())
+                        .entry(variant_name.to_string())
                         .or_default()
                         .entry(column)
                         .or_default() += lost;
@@ -268,7 +270,7 @@ impl Evaluator {
         let baseline = mean_some(auc.iter().copied()).unwrap_or(0.5);
 
         let mut variant_probs: HashMap<String, Columns> = HashMap::new();
-        let resiliency = match stress_variant(simulated_variants) {
+        let resiliency = match stress_variant(simulated_variants)? {
             Some((name, stress)) => {
                 let p = predict_matrix(model, &stress.x, k)?;
                 let stressed = per_label_auc(&y, &p);
@@ -367,19 +369,29 @@ impl Evaluator {
 
 /// The variant resiliency is measured on: whichever is not clean, jitter,
 /// flipper or sweep (blackout, scramble or units). Evaluation loads one
-/// simulation type at a time, so there is at most one.
+/// simulation type at a time, so there should be at most one; more (say, two
+/// parquet files in `scramble/`) is an error rather than a hash-order pick.
 pub(crate) fn stress_variant(
     variants: &HashMap<String, SimulationVariant>,
-) -> Option<(&str, &SimulationVariant)> {
-    variants
+) -> Result<Option<(&str, &SimulationVariant)>, CoreError> {
+    let mut stress: Vec<(&str, &SimulationVariant)> = variants
         .iter()
         .map(|(name, variant)| (name.as_str(), variant))
-        .find(|(name, _)| {
+        .filter(|(name, _)| {
             *name != "clean"
                 && *name != "flipper"
                 && !name.starts_with("jitter")
                 && !name.starts_with("sweep")
         })
+        .collect();
+    if stress.len() > 1 {
+        let mut names: Vec<&str> = stress.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        return Err(CoreError::InvalidConfig(format!(
+            "expected one stress variant (blackout, scramble or units), found {names:?}"
+        )));
+    }
+    Ok(stress.pop())
 }
 
 /// The metric that `metric_based` is keyed by, and the `baselines` keys, in
@@ -468,5 +480,34 @@ mod tests {
         let r = run_with("blackout", x);
         assert!(resiliency(&r) < 1.0);
         assert_eq!(r.parse_loss, None);
+    }
+
+    #[test]
+    fn flipper_id_columns_are_not_parse_loss() {
+        let x = df![
+            "val" => [0.1, 0.8, 0.2, 0.9],
+            "source_row_id" => ["pair_0_step_0", "pair_0_step_1", "pair_1_step_0", "pair_1_step_1"],
+        ]
+        .unwrap();
+        let mut variants = HashMap::from([(
+            "flipper".to_string(),
+            SimulationVariant {
+                x,
+                y: df!["target" => [0, 0, 0, 0]].unwrap(),
+            },
+        )]);
+        assert!(stress_variant(&variants).unwrap().is_none());
+
+        let stress = |x| SimulationVariant {
+            x,
+            y: df!["target" => [0, 1, 0, 1]].unwrap(),
+        };
+        variants.insert("scramble".into(), stress(df!["val" => ["1"]].unwrap()));
+        variants.insert("units".into(), stress(df!["val" => [1.0]].unwrap()));
+        let err = stress_variant(&variants).unwrap_err();
+        assert!(
+            err.to_string().contains("[\"scramble\", \"units\"]"),
+            "{err}"
+        );
     }
 }

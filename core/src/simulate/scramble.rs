@@ -74,7 +74,7 @@ impl ScrambleSimulator {
         let encoding = self.config.encodings[pick(u1, self.config.encodings.len())];
         let variants: Vec<String> = match encoding {
             ScrambleEncoding::NumericText => vec![
-                format!("{v}").replace('.', ","),
+                decimal_comma(v),
                 thousands(v),
                 format!(" {v} "),
                 format!("{v:e}"),
@@ -92,11 +92,22 @@ impl ScrambleSimulator {
     }
 }
 
+/// `5,2`. Whole numbers get `,0` (`5` -> `5,0`): `{v}` prints them without a
+/// decimal point, so a plain swap would leave text that still parses.
+fn decimal_comma(v: f64) -> String {
+    let s = format!("{v}");
+    if s.contains('.') {
+        s.replace('.', ",")
+    } else {
+        format!("{s},0")
+    }
+}
+
 /// `1,200.5` for |v| >= 1000; smaller values have no thousands to group, so
 /// they get the decimal-comma form instead.
 fn thousands(v: f64) -> String {
     if v.abs() < 1000.0 {
-        return format!("{v}").replace('.', ",");
+        return decimal_comma(v);
     }
     let s = format!("{}", v.abs());
     let (int, frac) = s.split_once('.').map_or((s.as_str(), ""), |(i, f)| (i, f));
@@ -186,6 +197,19 @@ mod tests {
         for v in parsed(&out) {
             assert!(matches!(v, Some(-999.0) | Some(9999.0)), "{v:?}");
         }
+    }
+
+    #[test]
+    fn numeric_text_forms_and_what_the_loader_makes_of_them() {
+        assert_eq!(decimal_comma(5.0), "5,0");
+        assert_eq!(decimal_comma(5.2), "5,2");
+        assert_eq!(thousands(1200.0), "1,200");
+        assert_eq!(thousands(-1234567.5), "-1,234,567.5");
+        assert_eq!(thousands(12.0), "12,0");
+
+        // Only scientific notation survives the loader's lenient cast.
+        let text = df!["val" => ["5,0", "1,200", " 5 ", "5e0", "5 mg/dL"]].unwrap();
+        assert_eq!(parsed(&text), vec![None, None, None, Some(5.0), None]);
     }
 
     #[test]

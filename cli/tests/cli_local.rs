@@ -2066,13 +2066,28 @@ fn units_preset_converts_and_identity_factor_is_fully_resilient() {
         assert!((units - clean / 18.016).abs() < 1e-9, "{units} vs {clean}");
     }
 
-    let (out, sim_root, _) = simulate_binary(&root, &["--unit-rate", "1.0", "--unit-factor", "1"]);
+    // A real shift on half the rows must reach the score; resiliency 1.0 is
+    // also what an ignored units/ variant would report.
+    let (out, sim_root, _) =
+        simulate_binary(&root, &["--unit-rate", "0.5", "--unit-factor", "1000"]);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("units", &sim_root, &labels, &model, "binary", &[]);
+    assert_ne!(
+        result["evaluations"]["metric_based"]["roc_auc"]["resiliency"], 1.0,
+        "got: {result}"
+    );
+
+    let (out, sim_root, _) = simulate_binary(&root, &["--unit-rate", "1.0", "--unit-factor", "1"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let result = evaluate_json("units", &sim_root, &labels, &model, "binary", &[]);
     assert_eq!(
         result["evaluations"]["metric_based"]["roc_auc"]["resiliency"],
@@ -2097,6 +2112,10 @@ fn units_rejects_bad_conversions() {
         &["--unit-rate", "0.5", "--unit-preset", "nope"],
         &["--unit-rate", "0.5"],
         &["--unit-rate", "0.5", "--unit-offset", "1"],
+        // Conversion or encoding flags without their rate are not ignored.
+        &["--unit-preset", "nope"],
+        &["--unit-factor", "2"],
+        &["--scramble-encoding", "censored"],
     ] {
         let (out, _, _) = simulate_binary(&root, extra);
         assert!(!out.status.success(), "{extra:?} should fail");
@@ -2121,5 +2140,25 @@ fn simulate_without_new_flags_skips_scramble_and_units() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("skipped scramble/"), "{stdout}");
     assert!(stdout.contains("skipped units/"), "{stdout}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn flipper_evaluation_reports_no_parse_loss() {
+    // Flipper grids keep text ids like `pair_0_step_3`; they are not features.
+    let root = temp_dir("flipper-parse-loss");
+    let labels = root.join("groups.parquet"); // written by simulate_binary
+    let (out, sim_root, _) = simulate_binary(
+        &root,
+        &["--labels", labels.to_str().unwrap(), "--flipper-pairs", "3"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("flipper", &sim_root, &labels, &model, "binary", &[]);
+    assert!(result.get("parse_loss").is_none(), "got: {result}");
     let _ = fs::remove_dir_all(&root);
 }

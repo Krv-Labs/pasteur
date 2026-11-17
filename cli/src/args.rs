@@ -230,17 +230,17 @@ pub struct SimulateArgs {
     #[arg(long)]
     pub scramble_rate: Option<f64>,
     /// Encoding scrambled rows may take (repeatable). Default: all four.
-    #[arg(long = "scramble-encoding", value_enum)]
+    #[arg(long = "scramble-encoding", value_enum, requires = "scramble_rate")]
     pub scramble_encodings: Vec<ScrambleEncodingArg>,
     /// Fraction of --feature rows rewritten as `value * factor + offset`, a
     /// site exporting the analyte in another unit. Without it units/ is skipped.
     #[arg(long)]
     pub unit_rate: Option<f64>,
     /// Named conversion (e.g. `glucose_mgdl_to_mmoll`); see UNIT_PRESETS.
-    #[arg(long, conflicts_with = "unit_factor")]
+    #[arg(long, conflicts_with = "unit_factor", requires = "unit_rate")]
     pub unit_preset: Option<String>,
     /// Custom conversion factor; the alternative to --unit-preset.
-    #[arg(long)]
+    #[arg(long, requires = "unit_rate")]
     pub unit_factor: Option<f64>,
     /// Custom conversion offset, added after --unit-factor.
     #[arg(long, requires = "unit_factor")]

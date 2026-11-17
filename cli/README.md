@@ -202,7 +202,7 @@ pasteur-cli cache clear --kind simulations
 
 Defined in [`core/src/schema.rs`](../core/src/schema.rs):
 
-- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel), `regression`, `oracle` (when `--oracle-labels` is passed), and `sweep` (for `sweep` evaluations) sections
+- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel), `regression`, `oracle` (when `--oracle-labels` is passed), and `sweep` (for `sweep` evaluations) sections, and `parse_loss` (stress-variant values that became null when cast to numbers)
 - **`ComparisonResult`**: `evaluations: [{ model_label, evaluation }]`
 
 ---

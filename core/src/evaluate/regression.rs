@@ -47,7 +47,7 @@ pub(crate) fn score_dataset(
     let clean_rmse = rmse(&y, &clean_pred);
     let clean_r2 = r2(&y, &clean_pred, target_variance);
 
-    let blackout_rmse = stress_variant(variants)
+    let blackout_rmse = stress_variant(variants)?
         .map(|(_, stress)| -> Result<f64, CoreError> {
             Ok(rmse(&y, &predict_column(model, &stress.x)?))
         })

@@ -277,12 +277,13 @@ with these fields:
        1 for a perfect model, 0 for one no better than predicting the mean,
        and negative for one worse than that.
    * - ``metric_based.r2.resiliency``
-     - Blackout R² ÷ clean R²: the share of the model's skill over predicting
-       the cohort mean that survives blackout. 1.0 means blackout cost
-       nothing; 0 means the model fell back to no better than the mean;
-       negative means blackout made it worse than the mean. It can exceed
-       1.0 when blackout happens to help, which usually means the
-       blacked-out feature was hurting the model. A model whose clean R² is
+     - Stressed R² ÷ clean R², where the stress variant is blackout, scramble
+       or units: the share of the model's skill over predicting the cohort
+       mean that survives it. 1.0 means the stress cost nothing; 0 means the
+       model fell back to no better than the mean; negative means it made the
+       model worse than the mean. It can exceed 1.0 when the stress happens
+       to help, which usually means the perturbed feature was hurting the
+       model. A model whose clean R² is
        0 or below has no skill to keep and is reported at the neutral 1.0;
        read ``baselines.r2`` first.
    * - ``metric_invariant.jitter_stability``

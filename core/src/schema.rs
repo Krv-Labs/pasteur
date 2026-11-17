@@ -226,7 +226,8 @@ pub struct EvaluationResult {
     /// only when a `sweep` variant was scored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<Vec<crate::evaluate::SweepScores>>,
-    /// Values per variant (then per column) that were present in the file but
+    /// Values in the stress variant (blackout, scramble or units), per column,
+    /// that were present in the file but
     /// became null when cast to numbers for the model. Scoring casts
     /// leniently, so text like `<0.01` turns into silent missingness; this
     /// makes it visible. Summed over datasets; absent when nothing was lost.
