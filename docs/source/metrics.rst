@@ -413,7 +413,8 @@ multilabel.
      - Share of pairs whose oracle label never changes along the path.
        Those pairs have no true boundary to compare against.
    * - ``oracle.abstain``
-     - With ``--abstain-class``, on blackout rows.
+     - With ``--abstain-class``, on the stress variant's rows (blackout,
+       scramble or units, whichever is loaded).
        ``abstain_when_missing``: of the rows where the oracle abstains, the
        share where the model abstains too (higher is better).
        ``decided_when_missing``: the share where it chose another class

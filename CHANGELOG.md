@@ -19,7 +19,8 @@
 - Resiliency is computed for whichever stress variant is loaded (blackout,
   scramble or units). Before, only a variant named `blackout` was scored and
   any other was silently ignored. Regression's `blackout_rmse`/`blackout_r2`
-  keep their names and hold the stress variant's numbers.
+  keep their names and hold the stress variant's numbers. The same goes for
+  `oracle.abstain` (`--abstain-class`), which scored only blackout before.
 
 ## 0.5.0
 

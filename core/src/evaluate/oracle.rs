@@ -3,7 +3,8 @@
 //! user's oracle, e.g. a rule engine), and the metrics here score the
 //! model's *decisions* against it: per-variant accuracy, jitter flips split
 //! by whether the oracle also changed, where the flipper boundary sits
-//! relative to the oracle's, and abstention under blackout.
+//! relative to the oracle's, and abstention under the stress variant
+//! (blackout, scramble or units).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::flipper::{find_flip_points, flipper_model_features, multi_crossing};
 use super::multi::{argmax_decision, label_matrix, threshold_decision, Columns};
-use super::{predict_matrix, Model};
+use super::{predict_matrix, stress_variant, Model};
 use crate::error::CoreError;
 use crate::schema::{EvaluationConfig, SimulationVariant, TaskType};
 
@@ -68,12 +69,14 @@ pub struct OracleFlipperScores {
     pub boundary_error_iqr: Option<f64>,
 }
 
-/// Blackout rows scored against the oracle's abstain class.
+/// The stress variant's rows (blackout, scramble or units) scored against
+/// the oracle's abstain class.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AbstainScores {
     pub class: String,
-    /// Of the rows where the oracle abstains, the share where the model
-    /// abstains too. Higher is better.
+    /// Of the stress variant's rows where the oracle abstains, the share
+    /// where the model abstains too. Higher is better. The name predates
+    /// scramble and units; it is kept for compatibility.
     pub abstain_when_missing: Option<f64>,
     /// Of the rows where the oracle abstains, the share where the model
     /// decides something else.
@@ -145,6 +148,7 @@ pub(crate) fn score_oracle(
     let mut jitter: Option<JitterTally> = None;
     let mut flipper = None;
     let mut abstain_scores = None;
+    let stress = stress_variant(variants)?.map(|(name, _)| name);
     for (name, variant) in variants {
         let is_flipper = name == "flipper";
         let x = if is_flipper {
@@ -160,7 +164,7 @@ pub(crate) fn score_oracle(
                 .add(&base, &scored, name)?;
         } else if is_flipper {
             flipper = Some(flipper_scores(&variant.x, task, &scored, thresholds)?);
-        } else if name == "blackout" {
+        } else if Some(name.as_str()) == stress {
             abstain_scores = abstain.map(|(class, j)| abstain_on(class, j, &scored));
         }
     }

@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 pub const SOURCE_ROW_ID_COL: &str = "source_row_id";
 pub const ROW_ORDINAL_COL: &str = "row_ordinal";
 /// Name of the variant a row was scored in: `clean`, `blackout`,
-/// `jitter_<i>`, `flipper` or `sweep` (the parquet file stem).
+/// `jitter_<i>`, `flipper`, `sweep`, `scramble` or `units` (the parquet file
+/// stem).
 pub const VARIANT_NAME_COL: &str = "variant_name";
 /// Identifies one scored row across a whole evaluation: `(variant_name,
 /// source_row_id)`. Every evaluation `x` frame carries both columns, and

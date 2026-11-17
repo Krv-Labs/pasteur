@@ -209,8 +209,8 @@ from each.
    * - ``--abstain-class``
      - none
      - Needs ``--oracle-labels``. The model's output class that means
-       "cannot decide", e.g. ``cannot_determine``. Adds blackout abstention
-       metrics
+       "cannot decide", e.g. ``cannot_determine``. Adds abstention metrics
+       for the stress variant (blackout, scramble or units)
    * - ``-o``, ``--output``
      - stdout
      - Write the JSON result to a file. The directory must already exist.

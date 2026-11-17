@@ -1831,7 +1831,8 @@ fn write_scored(
 }
 
 /// `simulate --sweep`, then precomputed predictions plus an oracle into
-/// `compare`: the sweep metrics must locate each model's boundary.
+/// `compare`: the sweep metrics must locate each model's boundary. Ends with
+/// abstention scored on a scramble variant.
 #[test]
 fn sweep_scores_precomputed_predictions_against_the_oracle() {
     let root = temp_dir("sweep-oracle");
@@ -1854,6 +1855,7 @@ fn sweep_scores_precomputed_predictions_against_the_oracle() {
         "simulate", "--input", input.to_str().unwrap(), "--output", sim_root.to_str().unwrap(),
         "--feature", "f1", "--jitter-iters", "1",
         "--sweep", "f1=1", "--sweep-range", "0:2", "--sweep-steps", "41",
+        "--scramble-rate", "0.5",
     ]);
     assert!(
         out.status.success(),
@@ -1959,6 +1961,45 @@ fn sweep_scores_precomputed_predictions_against_the_oracle() {
     // Two flips per path (low → mid → high), both where the oracle's are.
     assert_eq!(sweep["extra_flips_rate"], 1.0);
     assert_eq!(result["oracle"]["accuracy"]["sweep"], 1.0);
+
+    // Abstention is scored on the stress variant, here scramble: the model
+    // abstains on ids divisible by 3, the oracle on ids 1-6.
+    let rows: Vec<_> = ["clean", "scramble"]
+        .iter()
+        .flat_map(|v| (1..=12).map(move |i| (v.to_string(), i.to_string(), f64::from(i))))
+        .collect();
+    let scramble_preds = root.join("scramble_preds.parquet");
+    write_scored(&scramble_preds, &rows, &["low", "mid", "high"], |id| {
+        one_hot(if id % 3.0 == 0.0 { 1 } else { 0 })
+    });
+    let truth: Vec<_> = rows
+        .iter()
+        .map(|(v, id, i)| {
+            let abstain = v == "scramble" && *i <= 6.0;
+            (
+                v.clone(),
+                id.clone(),
+                vec![i64::from(!abstain), i64::from(abstain), 0],
+            )
+        })
+        .collect();
+    write_oracle(&oracle, &truth, &["group_1", "group_2", "group_3"]);
+    #[rustfmt::skip]
+    let result = run_json(&[
+        "evaluate", "scramble", "--sim-root", sim_root.to_str().unwrap(),
+        "--labels", labels.to_str().unwrap(), "--task", "multiclass",
+        "--positive-group-id", "1", "--positive-group-id", "2", "--positive-group-id", "3",
+        "--predictions", scramble_preds.to_str().unwrap(),
+        "--oracle-labels", oracle.to_str().unwrap(), "--abstain-class", "mid",
+    ]);
+    let abstain = &result["oracle"]["abstain"];
+    let c = &abstain["confusion"];
+    assert_eq!(c["oracle_abstain_model_abstain"], 2, "{abstain}");
+    assert_eq!(c["oracle_abstain_model_decided"], 4);
+    assert_eq!(c["oracle_decided_model_abstain"], 2);
+    assert_eq!(c["oracle_decided_model_decided"], 4);
+    let share = abstain["abstain_when_missing"].as_f64().unwrap();
+    assert!((share - 1.0 / 3.0).abs() < 1e-12);
     let _ = fs::remove_dir_all(&root);
 }
 
