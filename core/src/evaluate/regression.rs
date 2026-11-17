@@ -1,13 +1,13 @@
 //! Scoring for regression models: one predicted value per patient, compared
 //! against a continuous target. The headline fields keep their classifier
 //! meaning where one carries over (resiliency is "how much of the model's
-//! skill is kept under blackout"), and the `regression` section reports the
+//! skill is kept under the stress variant"), and the `regression` section reports the
 //! same numbers in the target's units.
 
 use super::flipper::{score_flipper, FlipperScores};
 use super::metrics::series_to_f64;
 use super::multi::mean_some;
-use super::{predict_matrix, predict_named, Model};
+use super::{predict_matrix, predict_named, stress_variant, Model};
 use crate::error::CoreError;
 use crate::schema::{RegressionScores, SimulationVariant, TaskType};
 use polars::prelude::*;
@@ -47,10 +47,9 @@ pub(crate) fn score_dataset(
     let clean_rmse = rmse(&y, &clean_pred);
     let clean_r2 = r2(&y, &clean_pred, target_variance);
 
-    let blackout_rmse = variants
-        .get("blackout")
-        .map(|blackout| -> Result<f64, CoreError> {
-            Ok(rmse(&y, &predict_column(model, &blackout.x)?))
+    let blackout_rmse = stress_variant(variants)
+        .map(|(_, stress)| -> Result<f64, CoreError> {
+            Ok(rmse(&y, &predict_column(model, &stress.x)?))
         })
         .transpose()?;
     let blackout_r2 = blackout_rmse.map(|stressed| 1.0 - stressed.powi(2) / target_variance);
@@ -136,13 +135,13 @@ pub(crate) fn r2(y: &[f64], pred: &[f64], target_variance: f64) -> f64 {
     1.0 - mse / target_variance
 }
 
-/// Blackout R² ÷ clean R²: the share of the model's skill over predicting
-/// the cohort mean that survives blackout. 1.0 means blackout cost nothing,
-/// 0 means the model fell back to no better than the mean, and it is
-/// negative when blackout made the model worse than the mean. It exceeds 1.0
-/// when blackout happens to help.
+/// Stressed R² ÷ clean R²: the share of the model's skill over predicting
+/// the cohort mean that survives the stress variant (blackout, scramble or
+/// units). 1.0 means the stress cost nothing, 0 means the model fell back to
+/// no better than the mean, and it is negative when the stress made the model
+/// worse than the mean. It exceeds 1.0 when the stress happens to help.
 ///
-/// A ratio of errors (clean RMSE ÷ blackout RMSE) would reward a model for
+/// A ratio of errors (clean RMSE ÷ stressed RMSE) would reward a model for
 /// having little accuracy to lose: its floor is `sqrt(1 − R²)`, so a weak
 /// model that collapses below the mean can outscore a strong one that keeps
 /// most of its skill.

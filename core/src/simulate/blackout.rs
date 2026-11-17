@@ -6,6 +6,7 @@ use rand::prelude::*;
 use super::patient::{
     apply_patient_window_mask, group_rows_by_patient, selected_patient_keys, time_sort_keys,
 };
+use super::rng::{row_mask, seeded_rng};
 use super::Simulator;
 
 pub struct BlackoutSimulator {
@@ -24,11 +25,7 @@ impl Simulator for BlackoutSimulator {
     }
 
     fn transform(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
-        let mut rng = if let Some(seed) = self.config.random_state {
-            StdRng::seed_from_u64(seed)
-        } else {
-            StdRng::from_entropy()
-        };
+        let mut rng = seeded_rng(self.config.random_state);
 
         if let Some(ref patient_id_col) = self.config.patient_id_col {
             self.transform_patient_level(df, &mut rng, patient_id_col)
@@ -44,19 +41,7 @@ impl BlackoutSimulator {
         df: &DataFrame,
         rng: &mut StdRng,
     ) -> Result<DataFrame, CoreError> {
-        let n_rows = df.height();
-        // Matches blackout.py's `_fit_row_mode`: truncating int(), not ceil().
-        let n_blackout = (n_rows as f64 * self.config.rate) as usize;
-
-        let mut indices: Vec<usize> = (0..n_rows).collect();
-        indices.shuffle(rng);
-        let blackout_indices = &indices[0..n_blackout.min(n_rows)];
-
-        let mut blackout_mask = vec![false; n_rows];
-        for &idx in blackout_indices {
-            blackout_mask[idx] = true;
-        }
-
+        let blackout_mask = row_mask(df.height(), self.config.rate, rng);
         self.apply_mask(df, &blackout_mask)
     }
 

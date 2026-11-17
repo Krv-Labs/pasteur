@@ -13,12 +13,13 @@ description: Local Pasteur simulation and evaluation CLI (pasteur-cli) for binar
 |------|---------|
 | Download a dataset or model | `hf download ...` |
 | Simulate blackout/jitter/flipper/sweep | `pasteur-cli simulate --input <clean.parquet> --labels <groups.parquet> [--sweep-features <name:cutoff>] --output ./sim` |
+| Add scramble / units (opt-in) | `... --scramble-rate 0.2` / `... --unit-rate 0.2 --unit-preset <name>` (or `--unit-factor F [--unit-offset O]`) |
 | Score one model or predictions table | `pasteur-cli evaluate <sim_type> --sim-root ./sim --labels <groups.parquet> (--model <model.onnx> \| --predictions <preds.parquet>)` |
 | Score several models / prediction tables | `pasteur-cli compare <sim_type> --sim-root ./sim --labels ... --model a.onnx --predictions rules=b.parquet [--predictions-out preds.parquet]` |
 | Write the dataset card | `pasteur-cli card --input ./sim --source-dataset <id> --dest-repo <id>` |
 | Publish a bundle | `hf repos create <id> --type dataset --private`, then `hf upload` |
 
-`<sim_type>` is `blackout`, `jitter`, `flipper`, or `sweep`. Pass `--oracle-labels <parquet>` instead of `--labels` when perturbations can change the true label. Flags and defaults: [cli/README.md](../../../cli/README.md).
+`<sim_type>` is `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, or `units`; resiliency is measured on whichever of blackout, scramble or units is loaded. Check `parse_loss` in scramble results: values the loader silently nulled. Pass `--oracle-labels <parquet>` instead of `--labels` when perturbations can change the true label. Flags and defaults: [cli/README.md](../../../cli/README.md).
 
 ## Task types
 
@@ -41,6 +42,8 @@ sim/
   blackout/blackout.parquet
   jitter/jitter_<i>.parquet
   flipper/flipper.parquet   # classifiers: needs --labels; regression: --targets and --flip-threshold
+  scramble/scramble.parquet # only with --scramble-rate
+  units/units.parquet       # only with --unit-rate
 ```
 
 Schemas: inputs and `metadata.json` in [Data Contracts](../../../docs/source/data-contracts.rst), outputs in [Output Layout](../../../docs/source/outputs.rst), metrics in [Reading the results](../../../docs/source/metrics.rst).

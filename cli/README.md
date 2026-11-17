@@ -29,7 +29,7 @@ Run: `cargo test -p pasteur-cli`.
 
 ### `simulate`
 
-Run Blackout, Jitter, Flipper, and Sweep simulators over a local clean parquet.
+Run Blackout, Jitter, Flipper, and Sweep simulators over a local clean parquet. Scramble and Units run only when their rate flag is given.
 
 ```bash
 pasteur-cli simulate \
@@ -54,11 +54,16 @@ pasteur-cli simulate \
 | `--output` | `output` | Root for sim-type folders |
 | `--dataset-name` | — | Provenance label for logs |
 | `--id-col` | `node_id` | Row id column (becomes `source_row_id`) |
-| `--feature` | `TSH` | Feature for blackout/jitter |
+| `--feature` | `TSH` | Feature for blackout/jitter/scramble/units |
 | `--blackout-companion` | — | Column nulled together with `--feature` (repeatable). Without it a blacked-out assay keeps its `_measured == 1` flag — a row no EHR emits |
 | `--blackout-rate` | `0.1` | Blackout mask rate |
 | `--jitter-scale` | `1.0` | Jitter noise scale |
 | `--jitter-iters` | `3` | Number of `jitter_<i>` variants |
+| `--scramble-rate` | — | Fraction of `--feature` rows written as messy text; enables scramble (the column becomes text) |
+| `--scramble-encoding` | all | Repeatable: `numeric-text`, `censored`, `unit-suffix`, `sentinel` |
+| `--unit-rate` | — | Fraction of rows converted; enables units with exactly one of `--unit-preset` or `--unit-factor` |
+| `--unit-preset` | — | Named conversion, e.g. `glucose_mgdl_to_mmoll` ([list](../docs/source/simulations.rst)) |
+| `--unit-factor`, `--unit-offset` | —, `0` | Custom conversion `value * factor + offset` |
 | `--positive-group-id` | `103` | `group_id` for positive cohort (flipper). Repeat once per class/label for `--task multiclass`/`multilabel` |
 | `--task` | `binary` | `binary`, `multiclass`, `multilabel`, or `regression`: how flipper pairs are sampled |
 | `--flip-threshold` | — | Regression only: clinical cutoff (target units) that flipper pairs straddle; omit to skip flipper |
@@ -120,7 +125,7 @@ pasteur-cli evaluate blackout \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `sim_type` | *(positional)* | e.g. `blackout`, `jitter`, `flipper`, `sweep` |
+| `sim_type` | *(positional)* | `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, or `units` |
 | `--sim-root` | *(required)* | Local bundle with `clean/` and `<sim_type>/` |
 | `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation (or use `--oracle-labels`) |
 | `--oracle-labels` | — | Per-row oracle labels parquet/CSV (`variant_name`, `source_row_id`, and `label` or `label__<class>`) |

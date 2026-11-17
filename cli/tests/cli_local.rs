@@ -1961,3 +1961,165 @@ fn sweep_scores_precomputed_predictions_against_the_oracle() {
     assert_eq!(result["oracle"]["accuracy"]["sweep"], 1.0);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Simulates the two-feature input on `f1` with `extra` flags; returns the
+/// output, the sim root, and binary labels (cohort 103 = even ids).
+fn simulate_binary(root: &Path, extra: &[&str]) -> (std::process::Output, PathBuf, PathBuf) {
+    let input = root.join("clean.parquet");
+    let labels = root.join("groups.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    write_groups(
+        &labels,
+        &[(100, &[1, 3, 5, 7, 9, 11]), (103, &[2, 4, 6, 8, 10, 12])],
+    );
+    let mut args = vec![
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        sim_root.to_str().unwrap(),
+        "--feature",
+        "f1",
+        "--jitter-iters",
+        "1",
+    ];
+    args.extend(extra);
+    (run_cli(&args), sim_root, labels)
+}
+
+fn read_variant(sim_root: &Path, sim_type: &str) -> DataFrame {
+    let path = sim_root.join(format!("{sim_type}/{sim_type}.parquet"));
+    ParquetReader::new(fs::File::open(path).unwrap())
+        .finish()
+        .unwrap()
+}
+
+#[test]
+fn scramble_censored_reports_parse_loss() {
+    let root = temp_dir("scramble-censored");
+    let (out, sim_root, labels) = simulate_binary(
+        &root,
+        &["--scramble-rate", "0.5", "--scramble-encoding", "censored"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let df = read_variant(&sim_root, "scramble");
+    assert_eq!(df.column("f1").unwrap().dtype(), &DataType::String);
+
+    let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("scramble", &sim_root, &labels, &model, "binary", &[]);
+    assert_eq!(result["parse_loss"]["scramble"]["f1"], 6);
+    assert!(result["evaluations"]["metric_based"]["roc_auc"]["resiliency"].is_number());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn scramble_sentinel_has_no_parse_loss() {
+    let root = temp_dir("scramble-sentinel");
+    let (out, sim_root, labels) = simulate_binary(
+        &root,
+        &["--scramble-rate", "0.5", "--scramble-encoding", "sentinel"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("scramble", &sim_root, &labels, &model, "binary", &[]);
+    assert!(result.get("parse_loss").is_none(), "got: {result}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn units_preset_converts_and_identity_factor_is_fully_resilient() {
+    let root = temp_dir("units");
+    let (out, sim_root, labels) = simulate_binary(
+        &root,
+        &[
+            "--unit-rate",
+            "1.0",
+            "--unit-preset",
+            "glucose_mgdl_to_mmoll",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("units/ glucose_mgdl_to_mmoll: value * "),
+        "{stdout}"
+    );
+    let f1 = |sim_type: &str| -> Vec<f64> {
+        let df = read_variant(&sim_root, sim_type);
+        let c = df.column("f1").unwrap().f64().unwrap().clone();
+        c.into_no_null_iter().collect()
+    };
+    for (clean, units) in f1("clean").iter().zip(f1("units")) {
+        assert!((units - clean / 18.016).abs() < 1e-9, "{units} vs {clean}");
+    }
+
+    let (out, sim_root, _) = simulate_binary(&root, &["--unit-rate", "1.0", "--unit-factor", "1"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("units", &sim_root, &labels, &model, "binary", &[]);
+    assert_eq!(
+        result["evaluations"]["metric_based"]["roc_auc"]["resiliency"],
+        1.0
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn units_rejects_bad_conversions() {
+    let root = temp_dir("units-bad");
+    for extra in [
+        &[
+            "--unit-rate",
+            "0.5",
+            "--unit-preset",
+            "glucose_mgdl_to_mmoll",
+            "--unit-factor",
+            "2",
+        ][..],
+        &["--unit-rate", "0.5", "--unit-factor", "0"],
+        &["--unit-rate", "0.5", "--unit-preset", "nope"],
+        &["--unit-rate", "0.5"],
+        &["--unit-rate", "0.5", "--unit-offset", "1"],
+    ] {
+        let (out, _, _) = simulate_binary(&root, extra);
+        assert!(!out.status.success(), "{extra:?} should fail");
+    }
+    let (out, _, _) = simulate_binary(&root, &["--unit-rate", "0.5", "--unit-preset", "nope"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("glucose_mgdl_to_mmoll"), "got: {err}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn simulate_without_new_flags_skips_scramble_and_units() {
+    let root = temp_dir("no-scramble-units");
+    let (out, sim_root, _) = simulate_binary(&root, &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!sim_root.join("scramble").exists());
+    assert!(!sim_root.join("units").exists());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("skipped scramble/"), "{stdout}");
+    assert!(stdout.contains("skipped units/"), "{stdout}");
+    let _ = fs::remove_dir_all(&root);
+}

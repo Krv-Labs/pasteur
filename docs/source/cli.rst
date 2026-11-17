@@ -41,13 +41,30 @@ Important options:
      - Source row identifier
    * - ``--feature``
      - ``TSH``
-     - Feature targeted by blackout and jitter
+     - Feature targeted by blackout, jitter, scramble, and units
    * - ``--blackout-companion``
      - none
      - Repeatable column nulled with the target feature
    * - ``--blackout-rate``
      - ``0.1``
      - Fraction of rows selected for blackout
+   * - ``--scramble-rate``
+     - none
+     - Fraction of rows written as messy text; enables scramble
+   * - ``--scramble-encoding``
+     - all
+     - Repeatable: ``numeric-text``, ``censored``, ``unit-suffix``,
+       ``sentinel``
+   * - ``--unit-rate``
+     - none
+     - Fraction of rows converted; enables units with exactly one of
+       ``--unit-preset`` or ``--unit-factor``
+   * - ``--unit-preset``
+     - none
+     - Named conversion (see :doc:`simulations`)
+   * - ``--unit-factor``, ``--unit-offset``
+     - none, ``0``
+     - Custom conversion: ``value * factor + offset``
    * - ``--jitter-scale``
      - ``1.0``
      - Noise scale
@@ -127,8 +144,8 @@ Score one local ONNX model:
      --model ./models/model.onnx \
      --output ./scores.json
 
-The positional simulation type can be ``blackout``, ``jitter``, ``flipper``, or
-``sweep`` (classifiers only).
+The positional simulation type can be ``blackout``, ``jitter``, ``flipper``,
+``sweep`` (classifiers only), ``scramble``, or ``units``.
 Each run loads only that folder; see :doc:`metrics` for which metric to read
 from each.
 

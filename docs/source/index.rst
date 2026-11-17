@@ -43,6 +43,18 @@ Pasteur
 
       Interpolate between differently labeled patients and locate decision flips.
 
+   .. grid-item-card:: Scramble
+      :link: simulations
+      :link-type: doc
+
+      Rewrite values as messy export text and count what the loader loses.
+
+   .. grid-item-card:: Unit conversion
+      :link: simulations
+      :link-type: doc
+
+      Convert some rows to another unit, as a second site's export would.
+
 .. list-table::
    :header-rows: 0
    :widths: 30 70
@@ -78,7 +90,8 @@ per-row predictions.
      - Result
    * - ``simulate``
      - Local parquet data and optional cohort labels
-     - Clean, blackout, jitter, and flipper parquets
+     - Clean, blackout, jitter, and flipper parquets; opt-in scramble and
+       units
    * - ``evaluate``
      - Simulation bundle, labels, and one ONNX model
      - Baseline and stability metrics (:doc:`metrics`)
@@ -101,7 +114,8 @@ Quick look
      --output ./output
 
 This writes ``clean/``, ``blackout/``, and ``jitter/`` beneath ``./output``.
-Add ``--labels groups.parquet`` to generate flipper pairs. For a complete
+Add ``--labels groups.parquet`` to generate flipper pairs, and
+``--scramble-rate`` or ``--unit-rate`` for the opt-in types. For a complete
 run from CSV to a model comparison, see :doc:`model-selection`.
 
 Designed for evidence, not a pass/fail badge

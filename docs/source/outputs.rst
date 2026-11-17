@@ -18,8 +18,12 @@ Simulation bundle
    │   └── jitter_1.parquet
    ├── flipper/
    │   └── flipper.parquet
-   └── sweep/
-       └── sweep.parquet
+   ├── sweep/
+   │   └── sweep.parquet
+   ├── scramble/              # only with --scramble-rate
+   │   └── scramble.parquet
+   └── units/                 # only with --unit-rate
+       └── units.parquet
 
 Every simulation parquet includes:
 
@@ -38,7 +42,8 @@ Every simulation parquet includes:
      - Clean-run row position
    * - Feature columns
      - numeric
-     - Model inputs carried from or derived from the source cohort
+     - Model inputs carried from or derived from the source cohort. In
+       ``scramble.parquet`` the ``--feature`` column is text
 
 Flipper metadata
 ----------------
@@ -84,8 +89,17 @@ Evaluation JSON
      "created_at": "2026-07-10T12:00:00Z"
    }
 
-``flipper_stability`` is populated for flipper evaluation and null for blackout
-or jitter runs.
+``flipper_stability`` is populated for flipper evaluation and null for other
+runs.
+
+``parse_loss`` counts values that were present in a variant but became null
+when cast to numbers for scoring, as ``{variant: {column: count}}``. It is
+omitted when nothing was lost. This is silent missingness: a scramble run with
+high parse loss is close to a blackout run.
+
+.. code-block:: json
+
+   "parse_loss": {"scramble": {"glucose": 41}}
 
 Multiclass and multilabel results add a ``multi`` object. The headline fields
 above hold macro averages; :doc:`metrics` defines each field.
@@ -125,6 +139,8 @@ units (see :doc:`metrics`):
    }
 
 Fields for simulation types that were not loaded are ``null``.
+``blackout_rmse`` and ``blackout_r2`` keep their names for compatibility but
+hold whichever stress variant was loaded: blackout, scramble, or units.
 
 When ``--oracle-labels`` is supplied, ``EvaluationResult`` adds an ``oracle``
 object with per-variant exact-match ``accuracy`` and variant-specific

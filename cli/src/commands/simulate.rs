@@ -2,8 +2,9 @@ use anyhow::{Context, Result};
 use pasteur_core::{
     simulate::flipper::{PAIR_ID_COL, STEP_COL},
     simulate::sweep::{SWEEP_CASE_ROW_COL, SWEEP_FEATURE_COL, SWEEP_STEP_COL},
-    BlackoutConfig, BlackoutSimulator, FlipperConfig, FlipperSimulator, JitterConfig,
-    JitterSimulator, Simulator, SweepConfig, SweepFeature, SweepSimulator, TaskType,
+    unit_preset, BlackoutConfig, BlackoutSimulator, FlipperConfig, FlipperSimulator, JitterConfig,
+    JitterSimulator, ScrambleConfig, ScrambleEncoding, ScrambleSimulator, Simulator, SweepConfig,
+    SweepFeature, SweepSimulator, TaskType, UnitsConfig, UnitsSimulator, UNIT_PRESETS,
 };
 use pasteur_hf::layout;
 use polars::prelude::*;
@@ -13,6 +14,8 @@ use crate::data::{class_indices, LabelSource};
 use crate::io::{read_parquet, with_ids, write_variant};
 
 pub fn run(args: SimulateArgs) -> Result<()> {
+    // Resolved before any variant is written, so a bad preset fails fast.
+    let units = resolve_units(&args)?;
     let (features, source_row_id, row_ordinal, provenance) = load_input(&args)?;
     println!(
         "Loaded {} ({} rows x {} cols) [{}]",
@@ -38,6 +41,8 @@ pub fn run(args: SimulateArgs) -> Result<()> {
     if let Some(sweep) = sweep {
         write_variant(&args.output, "sweep", "sweep", &sweep)?;
     }
+    run_scramble(&args, &features, &source_row_id, &row_ordinal)?;
+    run_units(&args, units, &features, &source_row_id, &row_ordinal)?;
 
     layout::validate_sim_bundle(&args.output)
         .context("simulation output failed layout validation")?;
@@ -100,6 +105,96 @@ fn run_blackout(
         &args.output,
         "blackout",
         "blackout",
+        &with_ids(&out, source_row_id, row_ordinal)?,
+    )
+}
+
+fn run_scramble(
+    args: &SimulateArgs,
+    features: &DataFrame,
+    source_row_id: &Column,
+    row_ordinal: &Column,
+) -> Result<()> {
+    let Some(rate) = args.scramble_rate else {
+        println!("  skipped scramble/ (pass --scramble-rate to generate)");
+        return Ok(());
+    };
+    let encodings = if args.scramble_encodings.is_empty() {
+        ScrambleEncoding::ALL.to_vec()
+    } else {
+        args.scramble_encodings.iter().map(|&e| e.into()).collect()
+    };
+    let mut sim = ScrambleSimulator::new(ScrambleConfig {
+        feature: args.feature.clone(),
+        rate,
+        encodings,
+        random_state: Some(args.random_state),
+    });
+    sim.fit(features)?;
+    let out = sim.transform(features)?;
+    write_variant(
+        &args.output,
+        "scramble",
+        "scramble",
+        &with_ids(&out, source_row_id, row_ordinal)?,
+    )
+}
+
+/// `(rate, label, factor, offset)` for the units variant, or `None` when
+/// `--unit-rate` is absent.
+type UnitsPlan = Option<(f64, String, f64, f64)>;
+
+fn resolve_units(args: &SimulateArgs) -> Result<UnitsPlan> {
+    let Some(rate) = args.unit_rate else {
+        return Ok(None);
+    };
+    // clap rules out --unit-preset with --unit-factor, and --unit-offset alone.
+    let (label, factor, offset) = match (&args.unit_preset, args.unit_factor) {
+        (Some(name), _) => {
+            let (f, o) = unit_preset(name).with_context(|| {
+                let names: Vec<&str> = UNIT_PRESETS.iter().map(|(n, _, _)| *n).collect();
+                format!(
+                    "unknown --unit-preset {name:?}; valid: {}",
+                    names.join(", ")
+                )
+            })?;
+            (name.clone(), f, o)
+        }
+        (None, Some(f)) => ("custom".to_string(), f, args.unit_offset.unwrap_or(0.0)),
+        (None, None) => {
+            anyhow::bail!("--unit-rate needs a conversion: pass --unit-preset or --unit-factor")
+        }
+    };
+    Ok(Some((rate, label, factor, offset)))
+}
+
+fn run_units(
+    args: &SimulateArgs,
+    units: UnitsPlan,
+    features: &DataFrame,
+    source_row_id: &Column,
+    row_ordinal: &Column,
+) -> Result<()> {
+    let Some((rate, label, factor, offset)) = units else {
+        println!(
+            "  skipped units/ (pass --unit-rate with --unit-preset or --unit-factor to generate)"
+        );
+        return Ok(());
+    };
+    let mut sim = UnitsSimulator::new(UnitsConfig {
+        feature: args.feature.clone(),
+        factor,
+        offset,
+        rate,
+        random_state: Some(args.random_state),
+    });
+    sim.fit(features)?;
+    let out = sim.transform(features)?;
+    println!("  units/ {label}: value * {factor} + {offset}");
+    write_variant(
+        &args.output,
+        "units",
+        "units",
         &with_ids(&out, source_row_id, row_ordinal)?,
     )
 }
