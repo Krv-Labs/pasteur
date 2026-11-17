@@ -31,9 +31,11 @@ impl PyBlackoutSimulator {
             time_col,
             random_state,
         };
-        Ok(Self {
-            inner: CoreBlackoutSimulator::new(config),
-        })
+        let inner = CoreBlackoutSimulator::new(config);
+        inner
+            .validate()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
     }
 
     fn fit(&mut self, df: PyDataFrame) -> PyResult<()> {

@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use pasteur_core::{
     simulate::flipper::{PAIR_ID_COL, STEP_COL},
     simulate::sweep::{SWEEP_CASE_ROW_COL, SWEEP_FEATURE_COL, SWEEP_STEP_COL},
-    unit_preset, BlackoutConfig, BlackoutSimulator, FlipperConfig, FlipperSimulator, JitterConfig,
-    JitterSimulator, ScrambleConfig, ScrambleEncoding, ScrambleSimulator, Simulator, SweepConfig,
-    SweepFeature, SweepSimulator, TaskType, UnitsConfig, UnitsSimulator, UNIT_PRESETS,
+    unit_preset, BlackoutConfig, BlackoutSimulator, CoreError, FlipperConfig, FlipperSimulator,
+    JitterConfig, JitterSimulator, ScrambleConfig, ScrambleEncoding, ScrambleSimulator, Simulator,
+    SweepConfig, SweepFeature, SweepSimulator, TaskType, UnitsConfig, UnitsSimulator, UNIT_PRESETS,
 };
 use pasteur_hf::layout;
 use polars::prelude::*;
@@ -14,8 +14,11 @@ use crate::data::{class_indices, LabelSource};
 use crate::io::{read_parquet, with_ids, write_variant};
 
 pub fn run(args: SimulateArgs) -> Result<()> {
-    // Resolved before any variant is written, so a bad preset fails fast.
-    let units = resolve_units(&args)?;
+    // Built and validated before any variant is written, so a bad rate,
+    // preset or conversion fails fast.
+    let blackout = build_blackout(&args)?;
+    let scramble = build_scramble(&args)?;
+    let units = build_units(&args)?;
     let (features, source_row_id, row_ordinal, provenance) = load_input(&args)?;
     println!(
         "Loaded {} ({} rows x {} cols) [{}]",
@@ -27,6 +30,7 @@ pub fn run(args: SimulateArgs) -> Result<()> {
 
     // Built first so a bad --sweep fails before any variant is written.
     let sweep = build_sweep(&args, &features, source_row_id.as_materialized_series())?;
+    check_feature_columns(&args, &features)?;
 
     write_variant(
         &args.output,
@@ -35,13 +39,13 @@ pub fn run(args: SimulateArgs) -> Result<()> {
         &with_ids(&features, &source_row_id, &row_ordinal)?,
     )?;
 
-    run_blackout(&args, &features, &source_row_id, &row_ordinal)?;
+    run_blackout(&args, blackout, &features, &source_row_id, &row_ordinal)?;
     run_jitter_iters(&args, &features, &source_row_id, &row_ordinal)?;
     run_flipper(&args, &features, source_row_id.as_materialized_series())?;
     if let Some(sweep) = sweep {
         write_variant(&args.output, "sweep", "sweep", &sweep)?;
     }
-    run_scramble(&args, &features, &source_row_id, &row_ordinal)?;
+    run_scramble(&args, scramble, &features, &source_row_id, &row_ordinal)?;
     run_units(&args, units, &features, &source_row_id, &row_ordinal)?;
 
     layout::validate_sim_bundle(&args.output)
@@ -83,13 +87,23 @@ fn load_input(args: &SimulateArgs) -> Result<(DataFrame, Column, Column, String)
     Ok((features, source_row_id, row_ordinal, provenance))
 }
 
-fn run_blackout(
-    args: &SimulateArgs,
-    features: &DataFrame,
-    source_row_id: &Column,
-    row_ordinal: &Column,
-) -> Result<()> {
-    let cfg = BlackoutConfig {
+/// Fails before any variant is written when --feature or a blackout companion
+/// is missing, or --feature is not numeric while jitter needs it to be.
+fn check_feature_columns(args: &SimulateArgs, features: &DataFrame) -> Result<()> {
+    for name in std::iter::once(&args.feature).chain(&args.blackout_companions) {
+        if features.column(name).is_err() {
+            return Err(CoreError::FeatureNotFound(name.clone()).into());
+        }
+    }
+    let dtype = features.column(&args.feature)?.dtype();
+    if args.jitter_iters > 0 && !dtype.is_numeric() {
+        anyhow::bail!("--feature {:?} is {dtype}, not numeric", args.feature);
+    }
+    Ok(())
+}
+
+fn build_blackout(args: &SimulateArgs) -> Result<BlackoutSimulator> {
+    let sim = BlackoutSimulator::new(BlackoutConfig {
         feature: args.feature.clone(),
         companions: args.blackout_companions.clone(),
         rate: args.blackout_rate,
@@ -97,8 +111,18 @@ fn run_blackout(
         patient_id_col: None,
         time_col: None,
         random_state: Some(args.random_state),
-    };
-    let mut sim = BlackoutSimulator::new(cfg);
+    });
+    sim.validate()?;
+    Ok(sim)
+}
+
+fn run_blackout(
+    args: &SimulateArgs,
+    mut sim: BlackoutSimulator,
+    features: &DataFrame,
+    source_row_id: &Column,
+    row_ordinal: &Column,
+) -> Result<()> {
     sim.fit(features)?;
     let out = sim.transform(features)?;
     write_variant(
@@ -109,27 +133,36 @@ fn run_blackout(
     )
 }
 
-fn run_scramble(
-    args: &SimulateArgs,
-    features: &DataFrame,
-    source_row_id: &Column,
-    row_ordinal: &Column,
-) -> Result<()> {
+fn build_scramble(args: &SimulateArgs) -> Result<Option<ScrambleSimulator>> {
     let Some(rate) = args.scramble_rate else {
-        println!("  skipped scramble/ (pass --scramble-rate to generate)");
-        return Ok(());
+        return Ok(None);
     };
     let encodings = if args.scramble_encodings.is_empty() {
         ScrambleEncoding::ALL.to_vec()
     } else {
         args.scramble_encodings.iter().map(|&e| e.into()).collect()
     };
-    let mut sim = ScrambleSimulator::new(ScrambleConfig {
+    let sim = ScrambleSimulator::new(ScrambleConfig {
         feature: args.feature.clone(),
         rate,
         encodings,
         random_state: Some(args.random_state),
     });
+    sim.validate()?;
+    Ok(Some(sim))
+}
+
+fn run_scramble(
+    args: &SimulateArgs,
+    sim: Option<ScrambleSimulator>,
+    features: &DataFrame,
+    source_row_id: &Column,
+    row_ordinal: &Column,
+) -> Result<()> {
+    let Some(mut sim) = sim else {
+        println!("  skipped scramble/ (pass --scramble-rate to generate)");
+        return Ok(());
+    };
     sim.fit(features)?;
     let out = sim.transform(features)?;
     write_variant(
@@ -140,11 +173,11 @@ fn run_scramble(
     )
 }
 
-/// `(rate, label, factor, offset)` for the units variant, or `None` when
-/// `--unit-rate` is absent.
-type UnitsPlan = Option<(f64, String, f64, f64)>;
+/// The validated units simulator and its `label: value * f + o` description,
+/// or `None` when `--unit-rate` is absent.
+type UnitsPlan = Option<(UnitsSimulator, String)>;
 
-fn resolve_units(args: &SimulateArgs) -> Result<UnitsPlan> {
+fn build_units(args: &SimulateArgs) -> Result<UnitsPlan> {
     let Some(rate) = args.unit_rate else {
         return Ok(None);
     };
@@ -165,7 +198,15 @@ fn resolve_units(args: &SimulateArgs) -> Result<UnitsPlan> {
             anyhow::bail!("--unit-rate needs a conversion: pass --unit-preset or --unit-factor")
         }
     };
-    Ok(Some((rate, label, factor, offset)))
+    let sim = UnitsSimulator::new(UnitsConfig {
+        feature: args.feature.clone(),
+        factor,
+        offset,
+        rate,
+        random_state: Some(args.random_state),
+    });
+    sim.validate()?;
+    Ok(Some((sim, format!("{label}: value * {factor} + {offset}"))))
 }
 
 fn run_units(
@@ -175,22 +216,15 @@ fn run_units(
     source_row_id: &Column,
     row_ordinal: &Column,
 ) -> Result<()> {
-    let Some((rate, label, factor, offset)) = units else {
+    let Some((mut sim, label)) = units else {
         println!(
             "  skipped units/ (pass --unit-rate with --unit-preset or --unit-factor to generate)"
         );
         return Ok(());
     };
-    let mut sim = UnitsSimulator::new(UnitsConfig {
-        feature: args.feature.clone(),
-        factor,
-        offset,
-        rate,
-        random_state: Some(args.random_state),
-    });
     sim.fit(features)?;
     let out = sim.transform(features)?;
-    println!("  units/ {label}: value * {factor} + {offset}");
+    println!("  units/ {label}");
     write_variant(
         &args.output,
         "units",

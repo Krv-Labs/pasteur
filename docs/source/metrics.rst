@@ -96,8 +96,11 @@ is to include the imputer in the exported pipeline; see
 
 **Unparseable text is silent missingness.** Scoring casts features to numbers
 non-strictly, so scrambled values such as ``5,2``, ``<5.2`` or ``5.2 mg/dL``
-become null and take the null fill without an error. ``parse_loss`` counts
-them; a scramble run with high parse loss is close to a blackout run. Sentinels
+become null without an error. They then take ``--null-fill`` or the model's
+``absent_sentinel`` if set, and otherwise reach the model as NaN.
+``parse_loss`` counts them: the stress variant's loss beyond what the clean
+variant already loses in the same column. A scramble run with high parse loss
+is close to a blackout run. Sentinels
 such as ``-999`` parse, to wrong values.
 
 Per-patient predictions
@@ -414,7 +417,9 @@ multilabel.
        Those pairs have no true boundary to compare against.
    * - ``oracle.abstain``
      - With ``--abstain-class``, on the stress variant's rows (blackout,
-       scramble or units, whichever is loaded).
+       scramble or units, whichever is loaded). Omitted when none is
+       loaded (``jitter``, ``flipper``, ``sweep``), so one set of flags
+       works for every simulation type.
        ``abstain_when_missing``: of the rows where the oracle abstains, the
        share where the model abstains too (higher is better).
        ``decided_when_missing``: the share where it chose another class

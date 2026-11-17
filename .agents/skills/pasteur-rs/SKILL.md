@@ -12,7 +12,7 @@ description: Local Pasteur simulation and evaluation CLI (pasteur-cli) for binar
 | Goal | Command |
 |------|---------|
 | Download a dataset or model | `hf download ...` |
-| Simulate blackout/jitter/flipper/sweep | `pasteur-cli simulate --input <clean.parquet> --labels <groups.parquet> [--sweep-features <name:cutoff>] --output ./sim` |
+| Simulate blackout/jitter/flipper/sweep | `pasteur-cli simulate --input <clean.parquet> --labels <groups.parquet> [--sweep <name=cutoff> --sweep-range <lo:hi>] --output ./sim` |
 | Add scramble / units (opt-in) | `... --scramble-rate 0.2` / `... --unit-rate 0.2 --unit-preset <name>` (or `--unit-factor F [--unit-offset O]`) |
 | Score one model or predictions table | `pasteur-cli evaluate <sim_type> --sim-root ./sim --labels <groups.parquet> (--model <model.onnx> \| --predictions <preds.parquet>)` |
 | Score several models / prediction tables | `pasteur-cli compare <sim_type> --sim-root ./sim --labels ... --model a.onnx --predictions rules=b.parquet [--predictions-out preds.parquet]` |

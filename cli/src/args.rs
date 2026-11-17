@@ -243,7 +243,7 @@ pub struct SimulateArgs {
     #[arg(long, requires = "unit_rate")]
     pub unit_factor: Option<f64>,
     /// Custom conversion offset, added after --unit-factor.
-    #[arg(long, requires = "unit_factor")]
+    #[arg(long, requires = "unit_factor", conflicts_with = "unit_preset")]
     pub unit_offset: Option<f64>,
     #[arg(long, default_value = "output")]
     pub output: PathBuf,

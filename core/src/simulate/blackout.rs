@@ -17,6 +17,18 @@ impl BlackoutSimulator {
     pub fn new(config: BlackoutConfig) -> Self {
         Self { config }
     }
+
+    /// Config checks that need no data, so callers can run them before
+    /// writing anything.
+    pub fn validate(&self) -> Result<(), CoreError> {
+        if !(0.0..=1.0).contains(&self.config.rate) {
+            return Err(CoreError::InvalidConfig(format!(
+                "blackout rate must be in [0, 1], got {}",
+                self.config.rate
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Simulator for BlackoutSimulator {
@@ -25,6 +37,7 @@ impl Simulator for BlackoutSimulator {
     }
 
     fn transform(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
+        self.validate()?;
         let mut rng = seeded_rng(self.config.random_state);
 
         if let Some(ref patient_id_col) = self.config.patient_id_col {

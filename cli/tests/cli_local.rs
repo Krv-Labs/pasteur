@@ -2157,13 +2157,55 @@ fn units_rejects_bad_conversions() {
         &["--unit-preset", "nope"],
         &["--unit-factor", "2"],
         &["--scramble-encoding", "censored"],
+        // Out-of-range values fail before any variant is written.
+        &["--scramble-rate", "1.5"],
+        &["--unit-rate", "0.2", "--unit-factor", "0"],
+        &["--blackout-rate", "1.5"],
+        &["--blackout-rate", "-0.1"],
+        // A preset fixes its own offset; --unit-offset would be ignored.
+        &[
+            "--unit-rate",
+            "0.3",
+            "--unit-preset",
+            "glucose_mgdl_to_mmoll",
+            "--unit-offset",
+            "3",
+        ],
+        // A missing companion fails before clean/ is written.
+        &["--blackout-companion", "not_a_column"],
     ] {
-        let (out, _, _) = simulate_binary(&root, extra);
+        let (out, sim_root, _) = simulate_binary(&root, extra);
         assert!(!out.status.success(), "{extra:?} should fail");
+        assert!(
+            !sim_root.join("clean/clean.parquet").exists(),
+            "{extra:?} wrote clean/ before failing"
+        );
     }
     let (out, _, _) = simulate_binary(&root, &["--unit-rate", "0.5", "--unit-preset", "nope"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("glucose_mgdl_to_mmoll"), "got: {err}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn simulate_rejects_missing_feature_before_writing() {
+    let root = temp_dir("missing-feature");
+    let input = root.join("clean.parquet");
+    let sim_root = root.join("sim");
+    write_two_feature_input(&input);
+    let out = run_cli(&[
+        "simulate",
+        "--input",
+        input.to_str().unwrap(),
+        "--output",
+        sim_root.to_str().unwrap(),
+        "--feature",
+        "not_a_column",
+    ]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not_a_column"), "got: {err}");
+    assert!(!sim_root.join("clean/clean.parquet").exists());
     let _ = fs::remove_dir_all(&root);
 }
 

@@ -36,7 +36,9 @@ impl UnitsSimulator {
         Self { config }
     }
 
-    fn validate(&self) -> Result<(), CoreError> {
+    /// Config checks that need no data, so callers can run them before
+    /// writing anything.
+    pub fn validate(&self) -> Result<(), CoreError> {
         let c = &self.config;
         if !c.factor.is_finite() || c.factor == 0.0 {
             return Err(CoreError::InvalidConfig(format!(

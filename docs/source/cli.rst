@@ -36,6 +36,9 @@ Important options:
    * - ``--output``
      - ``output``
      - Simulation bundle root
+   * - ``--dataset-name``
+     - input file name
+     - Provenance label printed in the log
    * - ``--id-col``
      - ``node_id``
      - Source row identifier

@@ -8,7 +8,7 @@ Simulation bundle
 .. code-block:: text
 
    output/
-   ├── README.md
+   ├── README.md              # only after `pasteur-cli card`
    ├── clean/
    │   └── clean.parquet
    ├── blackout/
@@ -92,9 +92,11 @@ Evaluation JSON
 ``flipper_stability`` is populated for flipper evaluation and null for other
 runs.
 
-``parse_loss`` counts values that were present in a variant but became null
-when cast to numbers for scoring, as ``{variant: {column: count}}``. It is
-omitted when nothing was lost. This is silent missingness: a scramble run with
+``parse_loss`` counts values that were present in the stress variant but
+became null when cast to numbers for scoring, beyond what the clean variant
+already loses in the same column, as ``{variant: {column: count}}``. A text
+column that is text in clean too (say, ``site``) is not counted. It is omitted
+when nothing was lost. This is silent missingness: a scramble run with
 high parse loss is close to a blackout run.
 
 .. code-block:: json

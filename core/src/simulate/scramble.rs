@@ -13,14 +13,10 @@ impl ScrambleSimulator {
     pub fn new(config: ScrambleConfig) -> Self {
         Self { config }
     }
-}
 
-impl Simulator for ScrambleSimulator {
-    fn fit(&mut self, _df: &DataFrame) -> Result<(), CoreError> {
-        Ok(())
-    }
-
-    fn transform(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
+    /// Config checks that need no data, so callers can run them before
+    /// writing anything.
+    pub fn validate(&self) -> Result<(), CoreError> {
         let cfg = &self.config;
         if cfg.encodings.is_empty() {
             return Err(CoreError::InvalidConfig(
@@ -33,6 +29,18 @@ impl Simulator for ScrambleSimulator {
                 cfg.rate
             )));
         }
+        Ok(())
+    }
+}
+
+impl Simulator for ScrambleSimulator {
+    fn fit(&mut self, _df: &DataFrame) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    fn transform(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
+        self.validate()?;
+        let cfg = &self.config;
         let column = df
             .column(&cfg.feature)
             .map_err(|_| CoreError::FeatureNotFound(cfg.feature.clone()))?;

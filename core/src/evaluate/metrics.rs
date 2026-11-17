@@ -105,7 +105,9 @@ pub(crate) fn series_to_f64(s: &Series) -> Result<Vec<f64>, CoreError> {
 /// `Float64` cast the model scoring applies (e.g. `"<0.01"`, `"ND"`). Only
 /// columns that lose something are listed. A column polars cannot cast at
 /// all is skipped: scoring would fail on it loudly anyway, and so is the row
-/// key (`variant_name`, `source_row_id`), which is text by design.
+/// key (`variant_name`, `source_row_id`), which is text by design. The
+/// evaluator reports a stress variant's loss beyond clean's, so a text column
+/// already in the data is not blamed on the variant.
 pub fn parse_loss(x: &DataFrame) -> BTreeMap<String, usize> {
     x.columns()
         .iter()

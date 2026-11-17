@@ -69,11 +69,11 @@ pasteur-cli simulate \
 | `--flip-threshold` | — | Regression only: clinical cutoff (target units) that flipper pairs straddle; omit to skip flipper |
 | `--flipper-pairs` | `200` | Cross-label pairs to sample |
 | `--flipper-steps` | `20` | Interpolation steps per pair |
-| `--sweep-features` | — | Comma-separated `NAME[:CUTOFF]` entries for 1-D sweep grids (`sweep/sweep.parquet`); omit to skip sweep |
-| `--sweep-range` | `0.5,2.0` | `MIN,MAX` of the sweep grid (multipliers of cutoff when `--sweep-relative-to cutoff`, raw feature units when `raw`) |
-| `--sweep-relative-to` | `cutoff` | `cutoff` or `raw` |
-| `--sweep-steps` | `31` | Uniform steps from `--sweep-range` min to max |
-| `--sweep-near` | — | Optional dense window `HALF_WIDTH,STEP` around the cutoff |
+| `--sweep` | — | Repeatable `FEATURE[=CUTOFF]`, one 1-D sweep grid per feature (`sweep/sweep.parquet`); omit to skip sweep |
+| `--sweep-range` | — | `LO:HI` of the grid, required with `--sweep`: absolute, or a multiplier of each feature's cutoff when `--sweep-relative-to` is set |
+| `--sweep-relative-to` | — | `CUTOFF`: makes `--sweep-range` relative, and is the cutoff for `--sweep` features without their own |
+| `--sweep-steps` | `25` | Grid points over `--sweep-range`, both ends included |
+| `--sweep-near` | — | `FRAC`: adds `--sweep-steps` more points within ±FRAC of the cutoff |
 | `--random-state` | `42` | RNG seed |
 
 The `--id-col`, `--feature`, and `--positive-group-id` defaults come from the example thyroid dataset; always pass them for your own data. `--jitter-scale` is in units of the feature's standard deviation.
@@ -127,16 +127,13 @@ pasteur-cli evaluate blackout \
 |------|---------|-------------|
 | `sim_type` | *(positional)* | `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, or `units` |
 | `--sim-root` | *(required)* | Local bundle with `clean/` and `<sim_type>/` |
-| `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation (or use `--oracle-labels`) |
-| `--oracle-labels` | — | Per-row oracle labels parquet/CSV (`variant_name`, `source_row_id`, and `label` or `label__<class>`) |
+| `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation. Required for every classifier, even with `--oracle-labels`; regression takes `--targets` instead |
+| `--oracle-labels` | — | Per-row oracle labels parquet (`variant_name`, `source_row_id`, and `label` for binary or one `group_<id>` per `--positive-group-id` for multiclass/multilabel; [schema](../docs/source/metrics.rst#oracle-labels)). Classifiers only |
 | `--abstain-class` | — | Output class that means "cannot decide" (multiclass/multilabel with `--oracle-labels`) |
 | `--targets`, `--target-col` | *(regression)* | Local targets parquet and its target column |
 | `--targets-id-col` | `node_id` | ID column of `--targets`, matched as text |
 | `--model` | *(or `--predictions`)* | Local `.onnx` path |
-| `--predictions` | *(or `--model`)* | Pre-computed predictions parquet/CSV (`[LABEL=]PATH` in `compare`) |
-| `--prediction-col` | `prediction` | Column prefix or column name in `--predictions` |
-| `--predictions-id-col` | `source_row_id` | Row ID column in `--predictions` (and `--oracle-labels`) |
-| `--predictions-variant-col` | `variant_name` | Variant column in `--predictions` (and `--oracle-labels`) |
+| `--predictions` | *(or `--model`)* | Pre-computed predictions parquet keyed by `variant_name` and `source_row_id`, one Float64 column per output (`[NAME=]PATH`) |
 | `--contract` | — | Explicit `metadata.json` path (default: next to `--model`) |
 | `--input-name` | `input` | ONNX input tensor name |
 | `--null-fill` | *(see below)* | What a null becomes on the way into the model |

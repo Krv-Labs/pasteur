@@ -123,13 +123,20 @@ impl Evaluator {
                 .collect();
             // Only the stress variant can carry re-encoded text; flipper grids
             // keep id columns like `pair_0_step_3` that would count as lost.
+            // Loss clean already has (a text column like `site`) is the data's,
+            // not the variant's, so only the excess is reported.
             if let Some((variant_name, variant)) = stress_variant(&dataset_variants)? {
+                let clean_loss = parse_loss(&clean_dataset.x);
                 for (column, lost) in parse_loss(&variant.x) {
+                    let extra = lost.saturating_sub(clean_loss.get(&column).copied().unwrap_or(0));
+                    if extra == 0 {
+                        continue;
+                    }
                     *parse_losses
                         .entry(variant_name.to_string())
                         .or_default()
                         .entry(column)
-                        .or_default() += lost;
+                        .or_default() += extra;
                 }
             }
             per_dataset_scores.push(self.run_single_dataset(
@@ -431,9 +438,13 @@ mod tests {
     }
 
     fn run_with(name: &str, x: DataFrame) -> EvaluationResult {
+        run_against(df!["val" => [0.1, 0.8, 0.2, 0.9]].unwrap(), name, x)
+    }
+
+    fn run_against(clean_x: DataFrame, name: &str, x: DataFrame) -> EvaluationResult {
         let y = df!["target" => [0, 1, 0, 1]].unwrap();
         let clean = SimulationVariant {
-            x: df!["val" => [0.1, 0.8, 0.2, 0.9]].unwrap(),
+            x: clean_x,
             y: y.clone(),
         };
         let variant = SimulationVariant { x, y };
@@ -480,6 +491,24 @@ mod tests {
         let r = run_with("blackout", x);
         assert!(resiliency(&r) < 1.0);
         assert_eq!(r.parse_loss, None);
+    }
+
+    #[test]
+    fn parse_loss_already_in_clean_is_not_reported() {
+        let site = ["A"; 4];
+        let clean = || df!["val" => [0.1, 0.8, 0.2, 0.9], "site" => site].unwrap();
+        let blackout = df!["val" => [Some(0.1), None, Some(0.2), None], "site" => site].unwrap();
+        assert_eq!(run_against(clean(), "blackout", blackout).parse_loss, None);
+
+        let scramble = df!["val" => ["0.1", "ND", "0.2", "<0.01"], "site" => site].unwrap();
+        let expected = BTreeMap::from([(
+            "scramble".to_string(),
+            BTreeMap::from([("val".to_string(), 2)]),
+        )]);
+        assert_eq!(
+            run_against(clean(), "scramble", scramble).parse_loss,
+            Some(expected)
+        );
     }
 
     #[test]
