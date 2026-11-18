@@ -1,7 +1,9 @@
 pub mod flipper;
 mod metrics;
 mod multi;
+pub mod oracle;
 mod regression;
+pub mod sweep;
 
 pub use flipper::{
     calculate_flipper_stability, find_flip_points, flipper_model_features, score_flipper,
@@ -11,6 +13,8 @@ pub use metrics::{
     calculate_jitter_stability, calculate_roc_auc, mean_jitter_variance, roc_auc,
     JITTER_STABILITY_ALPHA,
 };
+pub use oracle::{OracleConfig, OracleScores};
+pub use sweep::{score_sweep, sweep_scores, SweepScores};
 
 use crate::error::CoreError;
 use crate::schema::{
@@ -140,6 +144,35 @@ impl Evaluator {
                 (key.to_string(), value)
             })
             .collect();
+        // ponytail: sweep and oracle detail is per dataset and not averaged, so
+        // more than one dataset with it is refused rather than one picked in
+        // HashMap order. The CLI scores one dataset; add a per-dataset map if
+        // a library caller needs several.
+        for (what, n) in [
+            (
+                "sweep",
+                per_dataset_scores
+                    .iter()
+                    .filter(|s| s.sweep.is_some())
+                    .count(),
+            ),
+            (
+                "oracle",
+                per_dataset_scores
+                    .iter()
+                    .filter(|s| s.oracle.is_some())
+                    .count(),
+            ),
+        ] {
+            if n > 1 {
+                return Err(CoreError::InvalidConfig(format!(
+                    "{what} results are reported for one dataset, but {n} datasets have them; \
+                     evaluate each dataset separately"
+                )));
+            }
+        }
+        let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
+        let oracle = per_dataset_scores.iter_mut().find_map(|s| s.oracle.take());
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
             .into_iter()
             .map(|s| (s.multi, s.regression))
@@ -168,6 +201,8 @@ impl Evaluator {
             created_at: Utc::now(),
             multi,
             regression,
+            oracle,
+            sweep,
         })
     }
 
@@ -196,6 +231,8 @@ impl Evaluator {
                     flipper_stability: scored.flipper.map(|f| f.stability),
                     multi: None,
                     regression: Some(scored.detail),
+                    sweep: None,
+                    oracle: None,
                 })
             }
         }
@@ -219,25 +256,73 @@ impl Evaluator {
         // averages only the labels where AUC is defined.
         let baseline = mean_some(auc.iter().copied()).unwrap_or(0.5);
 
+        let mut variant_probs: HashMap<String, Columns> = HashMap::new();
         let resiliency = match simulated_variants.get("blackout") {
             Some(blackout) => {
-                let stressed = per_label_auc(&y, &predict_matrix(model, &blackout.x, k)?);
+                let p = predict_matrix(model, &blackout.x, k)?;
+                let stressed = per_label_auc(&y, &p);
+                variant_probs.insert("blackout".to_string(), p);
                 label_resiliency(task, &auc, &stressed)
             }
             None => vec![None; k],
         };
 
-        let jitter_draws: Vec<Columns> = simulated_variants
+        let mut jitter_draws: Vec<Columns> = Vec::new();
+        for (name, variant) in simulated_variants
             .iter()
             .filter(|(name, _)| name.starts_with("jitter"))
-            .map(|(_, variant)| predict_matrix(model, &variant.x, k))
-            .collect::<Result<_, _>>()?;
+        {
+            let p = predict_matrix(model, &variant.x, k)?;
+            if config.oracle.is_some() {
+                variant_probs.insert(name.clone(), p.clone());
+            }
+            jitter_draws.push(p);
+        }
         let jitter_variance = jitter_variances(&jitter_draws, k)?;
 
-        let flipper = simulated_variants
-            .get("flipper")
-            .map(|flipper| score_flipper(model, &flipper.x, task, k, &thresholds))
-            .transpose()?;
+        // Flipper and sweep predictions are kept for oracle scoring too, so
+        // each grid is predicted once.
+        let flipper = match simulated_variants.get("flipper") {
+            Some(flipper) => {
+                let p = predict_matrix(model, &flipper_model_features(&flipper.x)?, k)?;
+                if config.oracle.is_some() {
+                    variant_probs.insert("flipper".to_string(), p.clone());
+                }
+                Some(flipper::score_flipper_probs(
+                    &flipper.x,
+                    task,
+                    k,
+                    &thresholds,
+                    p,
+                )?)
+            }
+            None => None,
+        };
+
+        // With `--oracle-labels` every variant's `y` is the oracle's, grid
+        // rows included; without it sweep is scored descriptively.
+        let sweep = match simulated_variants.get("sweep") {
+            Some(grid) => {
+                let p = predict_matrix(model, &grid.x, k)?;
+                let oracle_y = config.oracle.as_ref().map(|_| &grid.y);
+                let scores = sweep::score_sweep_probs(&grid.x, task, &thresholds, oracle_y, &p)?;
+                if config.oracle.is_some() {
+                    variant_probs.insert("sweep".to_string(), p);
+                }
+                Some(scores)
+            }
+            None => None,
+        };
+        let oracle = oracle::score_oracle(
+            model,
+            clean_dataset,
+            simulated_variants,
+            config,
+            &names,
+            &thresholds,
+            Some(&probs),
+            &variant_probs,
+        )?;
 
         let multi = (!task.is_binary()).then(|| {
             let labels = LabelBreakdown {
@@ -263,6 +348,8 @@ impl Evaluator {
             flipper_stability: flipper.map(|f| f.stability),
             multi,
             regression: None,
+            sweep,
+            oracle,
         })
     }
 }
@@ -284,4 +371,6 @@ struct SingleDatasetScores {
     flipper_stability: Option<f64>,
     multi: Option<MultiOutputScores>,
     regression: Option<RegressionScores>,
+    sweep: Option<Vec<SweepScores>>,
+    oracle: Option<OracleScores>,
 }

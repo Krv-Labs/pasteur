@@ -29,7 +29,7 @@ Run: `cargo test -p pasteur-cli`.
 
 ### `simulate`
 
-Run Blackout, Jitter, and Flipper simulators over a local clean parquet.
+Run Blackout, Jitter, Flipper, and Sweep simulators over a local clean parquet.
 
 ```bash
 pasteur-cli simulate \
@@ -64,6 +64,11 @@ pasteur-cli simulate \
 | `--flip-threshold` | — | Regression only: clinical cutoff (target units) that flipper pairs straddle; omit to skip flipper |
 | `--flipper-pairs` | `200` | Cross-label pairs to sample |
 | `--flipper-steps` | `20` | Interpolation steps per pair |
+| `--sweep-features` | — | Comma-separated `NAME[:CUTOFF]` entries for 1-D sweep grids (`sweep/sweep.parquet`); omit to skip sweep |
+| `--sweep-range` | `0.5,2.0` | `MIN,MAX` of the sweep grid (multipliers of cutoff when `--sweep-relative-to cutoff`, raw feature units when `raw`) |
+| `--sweep-relative-to` | `cutoff` | `cutoff` or `raw` |
+| `--sweep-steps` | `31` | Uniform steps from `--sweep-range` min to max |
+| `--sweep-near` | — | Optional dense window `HALF_WIDTH,STEP` around the cutoff |
 | `--random-state` | `42` | RNG seed |
 
 The `--id-col`, `--feature`, and `--positive-group-id` defaults come from the example thyroid dataset; always pass them for your own data. `--jitter-scale` is in units of the feature's standard deviation.
@@ -102,7 +107,7 @@ Uploading is a separate, explicit `hf upload` step outside Pasteur. Only publish
 
 ### `evaluate`
 
-Score one local ONNX model against a local simulation bundle.
+Score one local ONNX model (or pre-computed predictions table) against a local simulation bundle.
 
 ```bash
 pasteur-cli evaluate blackout \
@@ -115,12 +120,18 @@ pasteur-cli evaluate blackout \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `sim_type` | *(positional)* | e.g. `blackout`, `jitter`, `flipper` |
+| `sim_type` | *(positional)* | e.g. `blackout`, `jitter`, `flipper`, `sweep` |
 | `--sim-root` | *(required)* | Local bundle with `clean/` and `<sim_type>/` |
-| `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation |
+| `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation (or use `--oracle-labels`) |
+| `--oracle-labels` | — | Per-row oracle labels parquet/CSV (`variant_name`, `source_row_id`, and `label` or `label__<class>`) |
+| `--abstain-class` | — | Output class that means "cannot decide" (multiclass/multilabel with `--oracle-labels`) |
 | `--targets`, `--target-col` | *(regression)* | Local targets parquet and its target column |
 | `--targets-id-col` | `node_id` | ID column of `--targets`, matched as text |
-| `--model` | *(required)* | Local `.onnx` path |
+| `--model` | *(or `--predictions`)* | Local `.onnx` path |
+| `--predictions` | *(or `--model`)* | Pre-computed predictions parquet/CSV (`[LABEL=]PATH` in `compare`) |
+| `--prediction-col` | `prediction` | Column prefix or column name in `--predictions` |
+| `--predictions-id-col` | `source_row_id` | Row ID column in `--predictions` (and `--oracle-labels`) |
+| `--predictions-variant-col` | `variant_name` | Variant column in `--predictions` (and `--oracle-labels`) |
 | `--contract` | — | Explicit `metadata.json` path (default: next to `--model`) |
 | `--input-name` | `input` | ONNX input tensor name |
 | `--null-fill` | *(see below)* | What a null becomes on the way into the model |
@@ -128,30 +139,30 @@ pasteur-cli evaluate blackout \
 | `--positive-group-id` | `103` | `group_id` for positive cohort; repeat once per model output (in `output.classes` order) for multiclass/multilabel |
 | `--task` | `binary` | Must match the model's `metadata.json` `task_type` |
 | `--dataset-name` | `simulation` | Internal dataset key in JSON |
-| `--flip-threshold` | `0.5` | Decision threshold for flipper stability (multilabel: labels without a contract threshold; unused for multiclass). Regression: clinical cutoff in target units, no default, required for `flipper` |
+| `--flip-threshold` | `0.5` | Decision threshold for flipper/sweep (multilabel: labels without a contract threshold; unused for multiclass). Regression: clinical cutoff in target units, no default, required for `flipper` |
 | `-o, --output` | stdout | Write `EvaluationResult` JSON to file |
 
 ---
 
 ### `compare`
 
-Score multiple local ONNX models; optionally write predictions parquet.
+Score multiple local ONNX models and/or pre-computed prediction tables; optionally write predictions parquet.
 
 ```bash
 pasteur-cli compare blackout \
   --sim-root ./sim \
   --labels ./labels/groups.parquet \
   --model ./models/a.onnx \
-  --model ./models/b.onnx \
+  --predictions rules=./predictions/rules.parquet \
   --predictions-out ./predictions/blackout.parquet \
   --output ./comparison.json
 ```
 
 Same flags as `evaluate`, except:
 
-- `--model` is repeatable (one per model). Models are labelled by file stem, so give each a different file name.
+- `--model` and `--predictions` are repeatable and can be mixed in one run (`--predictions [LABEL=]PATH`). Unlabelled inputs are named by file stem; every compared input must have a distinct label.
 - `--predictions-out` writes a local per-patient predictions parquet
-- A single `--contract` applies to every model
+- A single `--contract` applies to every model (or provides class/label names and thresholds when only `--predictions` are given)
 
 **Predictions schema:** `source_row_id`, `variant_name`, `label`, one f64 column per model (stem of model path), `all_agree` (every model makes the same decision). Binary decisions are the side of a fixed 0.5. Multiclass and multilabel write `label__<class>` and `<model>__<class>` per class; their decisions are the argmax, or the set of labels at or over each threshold. Regression writes `target` instead of `label`, and `all_agree` compares sides of `--flip-threshold` (null without one).
 
@@ -186,7 +197,7 @@ pasteur-cli cache clear --kind simulations
 
 Defined in [`core/src/schema.rs`](../core/src/schema.rs):
 
-- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel) or `regression` sections
+- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel), `regression`, `oracle` (when `--oracle-labels` is passed), and `sweep` (for `sweep` evaluations) sections
 - **`ComparisonResult`**: `evaluations: [{ model_label, evaluation }]`
 
 ---
