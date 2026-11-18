@@ -1,0 +1,15 @@
+{
+  "name": "pasteur",
+  "description": "Pasteur: stress-test clinical AI models locally",
+  "owner": {
+    "name": "Krv Labs",
+    "url": "https://github.com/Krv-Labs"
+  },
+  "plugins": [
+    {
+      "name": "pasteur",
+      "source": "./plugin",
+      "description": "Run the local Pasteur CLI to simulate data-quality failures and score ONNX models against them"
+    }
+  ]
+}

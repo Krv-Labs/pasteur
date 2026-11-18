@@ -13,7 +13,7 @@ Stress-test clinical AI models before you trust them. Pasteur simulates the ways
 |---|---|
 | **100% local** | Runs on your machine's CPU. No server, daemon, or admin rights. |
 | **No network, no telemetry** | Makes no network calls at runtime. Data, models, and results never leave the machine. |
-| **Standard tooling** | `pip install pypasteur` or `cargo install pasteur-cli`. BSD-3-Clause open source. |
+| **Standard tooling** | `npx @krv-labs/pasteur`, `cargo install pasteur-cli`, or `pip install pypasteur`. BSD-3-Clause open source. |
 
 ```text
 local parquet + ONNX models  →  Pasteur (CLI or Python)  →  local parquet + JSON metrics
@@ -26,11 +26,19 @@ Pasteur produces evidence about model behaviour under declared perturbations, no
 ## Install
 
 ```bash
-pip install pypasteur       # Python: blackout and jitter simulators (CPython ≥ 3.12)
-cargo install pasteur-cli   # CLI: simulate, evaluate, compare (Rust ≥ 1.95)
+npx -y @krv-labs/pasteur --help   # CLI, prebuilt (Node.js ≥ 18; macOS, Linux, Windows)
+cargo install pasteur-cli         # the same CLI, built from source (Rust ≥ 1.95)
+pip install pypasteur             # Python: blackout and jitter simulators (CPython ≥ 3.12)
 ```
 
-The PyPI package is **`pypasteur`**. The unrelated `pasteur` package on PyPI is a different project.
+`npm install -g @krv-labs/pasteur` puts `pasteur-cli` (and the alias `pasteur`) on your PATH; prebuilt binaries are also attached to each [GitHub release](https://github.com/Krv-Labs/pasteur/releases). The PyPI package is **`pypasteur`**. The unrelated `pasteur` package on PyPI is a different project.
+
+**Claude Code plugin**: a Pasteur skill plus a `/pasteur:robustness` command. In a Claude Code session:
+
+```text
+/plugin marketplace add Krv-Labs/pasteur
+/plugin install pasteur@pasteur
+```
 
 ## Quickstart
 
