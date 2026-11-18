@@ -168,7 +168,7 @@ impl Evaluator {
                 (key.to_string(), value)
             })
             .collect();
-        // ponytail: sweep and oracle detail is per dataset and not averaged, so
+        // Sweep and oracle detail is per dataset and not averaged, so
         // more than one dataset with it is refused rather than one picked in
         // HashMap order. The CLI scores one dataset; add a per-dataset map if
         // a library caller needs several.
