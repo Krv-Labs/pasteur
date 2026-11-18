@@ -17,7 +17,18 @@
               "flipper_stability": null,
               "jitter_stability": 1.0
             }
-          }
+          },
+          "stress": [
+            {
+              "decision_change_rate": 0.0,
+              "decisions_changed": 0,
+              "resiliency": 1.0,
+              "roc_auc": 0.0625,
+              "rows": 12,
+              "rows_changed": 1,
+              "variant": "blackout"
+            }
+          ]
         },
         "model_label": "binary_zipmap"
       },
@@ -37,7 +48,18 @@
               "flipper_stability": null,
               "jitter_stability": 1.0
             }
-          }
+          },
+          "stress": [
+            {
+              "decision_change_rate": 0.0,
+              "decisions_changed": 0,
+              "resiliency": 1.0,
+              "roc_auc": 0.0625,
+              "rows": 12,
+              "rows_changed": 1,
+              "variant": "blackout"
+            }
+          ]
         },
         "model_label": "binary_zipmap_copy"
       }
@@ -146,7 +168,18 @@
         "flipper_stability": null,
         "jitter_stability": 1.0
       }
-    }
+    },
+    "stress": [
+      {
+        "decision_change_rate": 0.0,
+        "decisions_changed": 0,
+        "resiliency": 1.0,
+        "roc_auc": 0.0625,
+        "rows": 12,
+        "rows_changed": 1,
+        "variant": "blackout"
+      }
+    ]
   },
   "binary/evaluate/flipper": {
     "baselines": {
@@ -885,7 +918,18 @@
             "roc_auc_micro": 1.0,
             "task": "multiclass",
             "worst_label_resiliency": 1.0
-          }
+          },
+          "stress": [
+            {
+              "decision_change_rate": 0.0,
+              "decisions_changed": 0,
+              "resiliency": 1.0,
+              "roc_auc": 1.0,
+              "rows": 12,
+              "rows_changed": 1,
+              "variant": "blackout"
+            }
+          ]
         },
         "model_label": "multiclass_tensor"
       },
@@ -936,7 +980,18 @@
             "roc_auc_micro": 1.0,
             "task": "multiclass",
             "worst_label_resiliency": 1.0
-          }
+          },
+          "stress": [
+            {
+              "decision_change_rate": 0.0,
+              "decisions_changed": 0,
+              "resiliency": 1.0,
+              "roc_auc": 1.0,
+              "rows": 12,
+              "rows_changed": 1,
+              "variant": "blackout"
+            }
+          ]
         },
         "model_label": "multiclass_tensor_copy"
       }
@@ -1202,7 +1257,18 @@
       "roc_auc_micro": 1.0,
       "task": "multiclass",
       "worst_label_resiliency": 1.0
-    }
+    },
+    "stress": [
+      {
+        "decision_change_rate": 0.0,
+        "decisions_changed": 0,
+        "resiliency": 1.0,
+        "roc_auc": 1.0,
+        "rows": 12,
+        "rows_changed": 1,
+        "variant": "blackout"
+      }
+    ]
   },
   "multiclass/evaluate/flipper": {
     "baselines": {
@@ -2652,7 +2718,18 @@
             "roc_auc_micro": 0.3111111111111111,
             "task": "multilabel",
             "worst_label_resiliency": 1.0
-          }
+          },
+          "stress": [
+            {
+              "decision_change_rate": 1.0,
+              "decisions_changed": 1,
+              "resiliency": 1.0,
+              "roc_auc": 0.2628968253968254,
+              "rows": 12,
+              "rows_changed": 1,
+              "variant": "blackout"
+            }
+          ]
         },
         "model_label": "multilabel_multioutput"
       },
@@ -2703,7 +2780,18 @@
             "roc_auc_micro": 0.3111111111111111,
             "task": "multilabel",
             "worst_label_resiliency": 1.0
-          }
+          },
+          "stress": [
+            {
+              "decision_change_rate": 1.0,
+              "decisions_changed": 1,
+              "resiliency": 1.0,
+              "roc_auc": 0.2628968253968254,
+              "rows": 12,
+              "rows_changed": 1,
+              "variant": "blackout"
+            }
+          ]
         },
         "model_label": "multilabel_multioutput_copy"
       }
@@ -2967,7 +3055,18 @@
       "roc_auc_micro": 0.3111111111111111,
       "task": "multilabel",
       "worst_label_resiliency": 1.0
-    }
+    },
+    "stress": [
+      {
+        "decision_change_rate": 1.0,
+        "decisions_changed": 1,
+        "resiliency": 1.0,
+        "roc_auc": 0.2628968253968254,
+        "rows": 12,
+        "rows_changed": 1,
+        "variant": "blackout"
+      }
+    ]
   },
   "multilabel/evaluate/flipper": {
     "baselines": {

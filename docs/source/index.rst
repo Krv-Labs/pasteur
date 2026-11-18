@@ -159,3 +159,4 @@ Pasteur is a research and evaluation tool, not a medical device.
 
    Data Contracts <data-contracts>
    Output Layout <outputs>
+   references
