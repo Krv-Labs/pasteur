@@ -2,8 +2,31 @@
 
 ## Unreleased
 
+## 0.5.0
+
 ### Added
 
+- `evaluate` and `compare` take `--predictions [NAME=]PATH`: predictions
+  scored outside Pasteur, keyed by `(variant_name, source_row_id)` with one
+  Float64 column per output. `compare` takes it repeatedly and mixes it with
+  `--model`. A missing or duplicate row is an error. A single-model
+  `--predictions-out` file can be fed straight back in.
+- A `sweep` simulator, Flipper's single-feature sibling: `simulate --sweep
+  feature[=cutoff]` with `--sweep-range`, `--sweep-relative-to`,
+  `--sweep-steps` and `--sweep-near` writes `sweep/sweep.parquet`, and
+  `evaluate sweep` reports `boundary_offset`, `monotonic_rate`,
+  `never_flipped`, `extra_flips_rate` and `accuracy_by_step` per feature in a
+  new `sweep` section, scored against `--oracle-labels`. Without them the
+  section is descriptive (`oracle: false`). Classifiers only.
+- `--oracle-labels <parquet>` on `evaluate` and `compare`: per-row true
+  labels keyed by `(variant_name, source_row_id)` replace the labels copied
+  from the clean row, and a new `oracle` section scores the model's
+  decisions against them: accuracy per variant, jitter
+  `flip_rate_label_preserved`/`flip_rate_label_changed`, and flipper
+  `boundary_error` (median and IQR of `flip_t − oracle_flip_t`).
+- `--abstain-class <name>`, with `--oracle-labels`: blackout
+  `abstain_when_missing`, `decided_when_missing` and an abstain/decided
+  confusion against the oracle.
 - Claude Code plugin: a `/pasteur:generalizability` command that sources a
   public dataset, runs site files and site draws against a model and
   reports the worst simulated site, plus site-file templates in the Pasteur
@@ -44,6 +67,11 @@
 
 ### Changed
 
+- Every evaluation `x` frame in `evaluate` and `compare` now carries the row
+  key `(variant_name, source_row_id)`, so a `Model` can tell which row it is
+  scoring. ONNX models still read only their `feature_order`, and their
+  output is unchanged. A bundle with a feature named `variant_name` is
+  refused, because that name is reserved for the key.
 - Resiliency is computed for whichever stress variant is loaded (blackout,
   scramble or units). Before, only a variant named `blackout` was scored and
   any other was silently ignored. Regression's `blackout_rmse`/`blackout_r2`
@@ -52,40 +80,6 @@
 - `generalizability` is now the lowest resiliency over the site draws scored.
   It was a placeholder that always read `1.0`, and still reads `1.0` when no
   site draws are loaded. With site draws, `resiliency` is their mean.
-
-## 0.5.0
-
-### Added
-
-- `evaluate` and `compare` take `--predictions [NAME=]PATH`: predictions
-  scored outside Pasteur, keyed by `(variant_name, source_row_id)` with one
-  Float64 column per output. `compare` takes it repeatedly and mixes it with
-  `--model`. A missing or duplicate row is an error. A single-model
-  `--predictions-out` file can be fed straight back in.
-- A `sweep` simulator, Flipper's single-feature sibling: `simulate --sweep
-  feature[=cutoff]` with `--sweep-range`, `--sweep-relative-to`,
-  `--sweep-steps` and `--sweep-near` writes `sweep/sweep.parquet`, and
-  `evaluate sweep` reports `boundary_offset`, `monotonic_rate`,
-  `never_flipped`, `extra_flips_rate` and `accuracy_by_step` per feature in a
-  new `sweep` section, scored against `--oracle-labels`. Without them the
-  section is descriptive (`oracle: false`). Classifiers only.
-- `--oracle-labels <parquet>` on `evaluate` and `compare`: per-row true
-  labels keyed by `(variant_name, source_row_id)` replace the labels copied
-  from the clean row, and a new `oracle` section scores the model's
-  decisions against them: accuracy per variant, jitter
-  `flip_rate_label_preserved`/`flip_rate_label_changed`, and flipper
-  `boundary_error` (median and IQR of `flip_t − oracle_flip_t`).
-- `--abstain-class <name>`, with `--oracle-labels`: blackout
-  `abstain_when_missing`, `decided_when_missing` and an abstain/decided
-  confusion against the oracle.
-
-### Changed
-
-- Every evaluation `x` frame in `evaluate` and `compare` now carries the row
-  key `(variant_name, source_row_id)`, so a `Model` can tell which row it is
-  scoring. ONNX models still read only their `feature_order`, and their
-  output is unchanged. A bundle with a feature named `variant_name` is
-  refused, because that name is reserved for the key.
 
 ## 0.4.1
 
