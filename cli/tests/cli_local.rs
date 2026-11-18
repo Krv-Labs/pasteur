@@ -2245,3 +2245,131 @@ fn flipper_evaluation_reports_no_parse_loss() {
     assert!(result.get("parse_loss").is_none(), "got: {result}");
     let _ = fs::remove_dir_all(&root);
 }
+
+/// `simulate_binary` with a site file written from `site_json`.
+fn simulate_site(
+    root: &Path,
+    site_json: &str,
+    extra: &[&str],
+) -> (std::process::Output, PathBuf, PathBuf) {
+    let site = root.join("site.json");
+    fs::write(&site, site_json).unwrap();
+    let mut args = vec!["--site", site.to_str().unwrap()];
+    args.extend(extra);
+    simulate_binary(root, &args)
+}
+
+#[test]
+fn site_identity_control_changes_nothing() {
+    let root = temp_dir("site-identity");
+    let (out, sim_root, labels) = simulate_site(
+        &root,
+        r#"{"steps": [{"units": {"feature": "f1", "factor": 1, "rate": 1.0}}]}"#,
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("site", &sim_root, &labels, &model, "binary", &[]);
+    let scores = &result["evaluations"]["metric_based"]["roc_auc"];
+    assert_eq!(scores["resiliency"], 1.0);
+    assert_eq!(scores["generalizability"], 1.0);
+    assert_eq!(result["stress"][0]["variant"], "site");
+    assert_eq!(result["stress"][0]["rows_changed"], 0);
+    assert!(result.get("parse_loss").is_none(), "got: {result}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn site_draws_report_the_worst_site_as_generalizability() {
+    let root = temp_dir("site-draws");
+    let site = r#"{"steps": [
+        {"scramble": {"feature": "f1", "rate": 0.5, "encodings": ["censored"]}},
+        {"blackout": {"feature": "f2", "rate": 0.5, "chance": 0.5}}
+    ]}"#;
+    let (out, sim_root, labels) = simulate_site(&root, site, &["--site-draws", "3"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for i in 0..3 {
+        assert!(sim_root.join(format!("site/site_{i}.parquet")).exists());
+    }
+    assert!(!sim_root.join("site/site.parquet").exists());
+
+    let model = fixture_model(&root.join("m"), "binary_zipmap", "binary", &["0", "1"]);
+    let result = evaluate_json("site", &sim_root, &labels, &model, "binary", &[]);
+    let stress = result["stress"].as_array().unwrap();
+    assert_eq!(stress.len(), 3);
+    let per_site: Vec<f64> = stress
+        .iter()
+        .map(|s| s["resiliency"].as_f64().unwrap())
+        .collect();
+    let worst = per_site.iter().copied().fold(f64::INFINITY, f64::min);
+    let scores = &result["evaluations"]["metric_based"]["roc_auc"];
+    assert_eq!(scores["generalizability"].as_f64().unwrap(), worst);
+    let mean = per_site.iter().sum::<f64>() / 3.0;
+    assert!((scores["resiliency"].as_f64().unwrap() - mean).abs() < 1e-12);
+    // Half of f1 is censored text in every draw.
+    assert_eq!(result["parse_loss"]["site_0"]["f1"], 6);
+    assert_eq!(stress[0]["rows_changed"].as_u64().unwrap() >= 6, true);
+
+    // A later run without draws replaces them rather than leaving both.
+    let (out, sim_root, _) = simulate_site(&root, site, &[]);
+    assert!(out.status.success());
+    assert!(sim_root.join("site/site.parquet").exists());
+    assert!(!sim_root.join("site/site_0.parquet").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn bad_site_files_fail_before_anything_is_written() {
+    for (name, site, extra, expected) in [
+        (
+            "preset",
+            r#"{"steps": [{"units": {"feature": "f1", "preset": "nope", "rate": 1.0}}]}"#,
+            &[][..],
+            "unknown unit preset",
+        ),
+        (
+            "column",
+            r#"{"steps": [{"blackout": {"feature": "not_a_column", "rate": 0.5}}]}"#,
+            &[][..],
+            "not_a_column",
+        ),
+        (
+            "typo",
+            r#"{"steps": [{"blackout": {"feature": "f1", "rate": 0.5, "chanse": 1}}]}"#,
+            &[][..],
+            "chanse",
+        ),
+        (
+            "draws",
+            r#"{"steps": [{"blackout": {"feature": "f1", "rate": 0.5}}]}"#,
+            &["--site-draws", "0"][..],
+            "--site-draws",
+        ),
+    ] {
+        let root = temp_dir(&format!("site-bad-{name}"));
+        let (out, sim_root, _) = simulate_site(&root, site, extra);
+        assert!(!out.status.success(), "{name} should fail");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(expected), "{name}: {err}");
+        assert!(!sim_root.join("clean/clean.parquet").exists(), "{name}");
+        let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[test]
+fn catalog_prints_the_toolkit_as_json() {
+    let out = run_cli(&["catalog"]);
+    assert!(out.status.success());
+    let catalog: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(catalog["unit_presets"].as_array().unwrap().len(), 9);
+    assert_eq!(catalog["scramble_encodings"].as_array().unwrap().len(), 4);
+    assert!(catalog["site_file"]["example"]["steps"].is_array());
+}

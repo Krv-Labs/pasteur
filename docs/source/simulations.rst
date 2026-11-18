@@ -188,6 +188,75 @@ Presets convert conventional units to SI:
 Scramble and units are opt-in: ``simulate`` writes nothing new without their
 rate flags.
 
+Site
+----
+
+The simulators above change one feature at a time. One hospital's export is
+usually wrong in several columns at once: FT4 in pmol/L, TSH censored at the
+detection limit, an antibody assay the site never orders. A site file lists
+those perturbations as steps, and ``--site`` applies them together as one
+stress variant, ``site/site.parquet``:
+
+.. code-block:: json
+
+   {"steps": [
+     {"units":    {"feature": "FT4",  "preset": "ft4_ngdl_to_pmoll", "rate": 1.0}},
+     {"blackout": {"feature": "T3", "companions": ["T3_measured"], "rate": 1.0}},
+     {"scramble": {"feature": "TSH",  "rate": 0.3, "encodings": ["censored"]}}
+   ]}
+
+.. code-block:: bash
+
+   pasteur-cli simulate \
+     --input patients.parquet \
+     --site site.json
+
+Each step is one of ``blackout``, ``scramble`` or ``units`` with the same
+meaning as above, on its own ``feature``. A ``units`` step takes ``preset`` or
+``factor`` (with optional ``offset``). ``pasteur-cli catalog`` prints the
+format, the presets and the encodings as JSON.
+
+- Steps run in order, and each picks its own rows. Two steps at the same
+  ``rate`` do not hit the same patients.
+- Nothing may touch a feature after a ``scramble`` step, because scramble
+  leaves the column as text. Put scramble last for that feature.
+- Encoding names in a site file use underscores (``numeric_text``,
+  ``unit_suffix``); the ``--scramble-encoding`` flag uses hyphens.
+- A bad rate, an unknown preset, an unknown field or a missing column stops
+  the run before anything is written.
+
+Site draws
+~~~~~~~~~~
+
+One site file can stand for many sites. Give a step a ``chance`` between 0
+and 1, and ``--site-draws N`` writes ``site/site_0.parquet`` to
+``site/site_<N-1>.parquet``. Each draw keeps each step with its chance and
+picks its own rows, so the draws differ in which problems they have and in
+which patients are hit:
+
+.. code-block:: bash
+
+   pasteur-cli simulate \
+     --input patients.parquet \
+     --site site.json \
+     --site-draws 20
+
+``simulate`` prints which steps each draw applied. ``evaluate site`` then
+scores every draw: ``resiliency`` is the mean over draws,
+``generalizability`` is the worst draw, and ``stress`` lists each one (see
+:doc:`metrics`). Without ``--site-draws`` the site is written as declared,
+every step applied, and ``chance`` is not used. Re-running into the same
+output replaces the earlier ``site/`` files.
+
+This is domain randomization [Tobin2017]_ applied to exports: if a model
+holds across many simulated sites, a real site is more likely to look like
+one more draw. It follows the observation that clinical models degrade
+between hospitals for reasons tied to each site's processes rather than to
+biology [Zech2018]_ [Wong2021]_ [Finlayson2021]_, and that stability under a
+declared shift can be measured on the data already at hand
+[Subbaswamy2021]_. Site draws are scored for classifiers; a regression model
+is scored on one site at a time.
+
 Reproducibility
 ---------------
 
@@ -212,6 +281,12 @@ Interpretation
   ``--unit-factor 10``. Mass-to-molar factors are per analyte, so a preset is
   only right for its named analyte. Log-scale quantities such as pH are not
   covered.
+- A site is a declared composition of these perturbations on one cohort. It
+  is not another hospital's patients: the population, the outcome rate and
+  the clinical practice stay the same. Site draws vary only what the site
+  file lists.
+
+:doc:`references` gives the literature behind each simulator and metric.
 
 These simulations are evidence about a model under explicit conditions. They
 are not a substitute for local validation or clinical safety review.

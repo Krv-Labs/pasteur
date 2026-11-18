@@ -3,7 +3,10 @@ mod metrics;
 mod multi;
 pub mod oracle;
 mod regression;
+mod stress;
 pub mod sweep;
+
+pub use stress::StressScores;
 
 pub use flipper::{
     calculate_flipper_stability, find_flip_points, flipper_model_features, score_flipper,
@@ -125,8 +128,8 @@ impl Evaluator {
             // keep id columns like `pair_0_step_3` that would count as lost.
             // Loss clean already has (a text column like `site`) is the data's,
             // not the variant's, so only the excess is reported.
-            if let Some((variant_name, variant)) = stress_variant(&dataset_variants)? {
-                let clean_loss = parse_loss(&clean_dataset.x);
+            let clean_loss = parse_loss(&clean_dataset.x);
+            for (variant_name, variant) in stress_variants(&dataset_variants)? {
                 for (column, lost) in parse_loss(&variant.x) {
                     let extra = lost.saturating_sub(clean_loss.get(&column).copied().unwrap_or(0));
                     if extra == 0 {
@@ -154,6 +157,8 @@ impl Evaluator {
         let jitter_stability = mean(&|s| Some(s.jitter_stability)).unwrap_or(1.0);
         let flipper_stability = mean(&|s| s.flipper_stability);
         let resiliency = mean(&|s| Some(s.resiliency)).unwrap_or(1.0);
+        // Defined only when site draws were scored; neutral otherwise.
+        let generalizability = mean(&|s| s.generalizability).unwrap_or(1.0);
         let (metric, keys) = baseline_keys(config.task);
         let baselines = keys
             .iter()
@@ -182,6 +187,13 @@ impl Evaluator {
                     .filter(|s| s.oracle.is_some())
                     .count(),
             ),
+            (
+                "stress",
+                per_dataset_scores
+                    .iter()
+                    .filter(|s| s.stress.is_some())
+                    .count(),
+            ),
         ] {
             if n > 1 {
                 return Err(CoreError::InvalidConfig(format!(
@@ -192,6 +204,7 @@ impl Evaluator {
         }
         let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
         let oracle = per_dataset_scores.iter_mut().find_map(|s| s.oracle.take());
+        let stress = per_dataset_scores.iter_mut().find_map(|s| s.stress.take());
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
             .into_iter()
             .map(|s| (s.multi, s.regression))
@@ -199,12 +212,11 @@ impl Evaluator {
         let multi = average_multi(multi.into_iter().flatten().collect());
         let regression = regression::average_regression(regression.into_iter().flatten().collect());
 
-        // Generalizability is a placeholder.
         let metric_based = HashMap::from([(
             metric.to_string(),
             MetricBasedScores {
                 resiliency,
-                generalizability: 1.0,
+                generalizability,
             },
         )]);
 
@@ -223,6 +235,7 @@ impl Evaluator {
             oracle,
             sweep,
             parse_loss: (!parse_losses.is_empty()).then_some(parse_losses),
+            stress,
         })
     }
 
@@ -253,6 +266,8 @@ impl Evaluator {
                     regression: Some(scored.detail),
                     sweep: None,
                     oracle: None,
+                    generalizability: None,
+                    stress: None,
                 })
             }
         }
@@ -277,15 +292,53 @@ impl Evaluator {
         let baseline = mean_some(auc.iter().copied()).unwrap_or(0.5);
 
         let mut variant_probs: HashMap<String, Columns> = HashMap::new();
-        let resiliency = match stress_variant(simulated_variants)? {
-            Some((name, stress)) => {
-                let p = predict_matrix(model, &stress.x, k)?;
-                let stressed = per_label_auc(&y, &p);
-                variant_probs.insert(name.to_string(), p);
-                label_resiliency(task, &auc, &stressed)
-            }
-            None => vec![None; k],
-        };
+        // One stress variant, or several site draws. Each is scored on its
+        // own; per-label resiliency is the mean over them.
+        let abstain = config
+            .oracle
+            .as_ref()
+            .and_then(|o| o.abstain_class.as_deref())
+            .map(|class| oracle::abstain_index(task, &names, class))
+            .transpose()?;
+        let clean_decisions = oracle::decisions(task, &probs, &thresholds);
+        let mut per_variant: Vec<Vec<Option<f64>>> = Vec::new();
+        let mut stress_scores: Vec<StressScores> = Vec::new();
+        for (name, variant) in stress_variants(simulated_variants)? {
+            let p = predict_matrix(model, &variant.x, k)?;
+            let stressed = per_label_auc(&y, &p);
+            let label_scores = label_resiliency(task, &auc, &stressed);
+            let changed = stress::changed_rows(&clean_dataset.x, &variant.x)?;
+            let rows_changed = changed.iter().filter(|&&c| c).count();
+            let (decisions_changed, silent) = stress::decision_changes(
+                &changed,
+                &clean_decisions,
+                &oracle::decisions(task, &p, &thresholds),
+                abstain,
+            );
+            let rate = |n: usize| (rows_changed > 0).then(|| n as f64 / rows_changed as f64);
+            stress_scores.push(StressScores {
+                variant: name.to_string(),
+                roc_auc: mean_some(stressed.iter().copied()),
+                resiliency: mean_some(label_scores.iter().copied()),
+                rows: changed.len(),
+                rows_changed,
+                decisions_changed,
+                decision_change_rate: rate(decisions_changed),
+                silent_change_rate: silent.and_then(rate),
+            });
+            variant_probs.insert(name.to_string(), p);
+            per_variant.push(label_scores);
+        }
+        let resiliency: Vec<Option<f64>> = (0..k)
+            .map(|j| mean_some(per_variant.iter().map(|scores| scores[j])))
+            .collect();
+        // The worst simulated site, not the average one: a mean over sites
+        // hides the site the model fails at.
+        let generalizability = stress_scores
+            .iter()
+            .filter(|s| is_site_draw(&s.variant))
+            .filter_map(|s| s.resiliency)
+            .reduce(f64::min);
 
         let mut jitter_draws: Vec<Columns> = Vec::new();
         for (name, variant) in simulated_variants
@@ -370,17 +423,27 @@ impl Evaluator {
             regression: None,
             sweep,
             oracle,
+            generalizability,
+            stress: (!stress_scores.is_empty()).then_some(stress_scores),
         })
     }
 }
 
-/// The variant resiliency is measured on: whichever is not clean, jitter,
-/// flipper or sweep (blackout, scramble or units). Evaluation loads one
-/// simulation type at a time, so there should be at most one; more (say, two
-/// parquet files in `scramble/`) is an error rather than a hash-order pick.
-pub(crate) fn stress_variant(
+/// A random site draw, `site_<i>`, as `simulate --site-draws` names them.
+fn is_site_draw(name: &str) -> bool {
+    name.strip_prefix("site_")
+        .is_some_and(|i| !i.is_empty() && i.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The variants resiliency is measured on: whichever are not clean, jitter,
+/// flipper or sweep (blackout, scramble, units or site). Evaluation loads one
+/// simulation type at a time, so there is at most one, except for site draws
+/// (`site_0`, `site_1`, ...), which are returned in draw order. Any other
+/// group of several (say, two parquet files in `scramble/`) is an error
+/// rather than a hash-order pick.
+pub(crate) fn stress_variants(
     variants: &HashMap<String, SimulationVariant>,
-) -> Result<Option<(&str, &SimulationVariant)>, CoreError> {
+) -> Result<Vec<(&str, &SimulationVariant)>, CoreError> {
     let mut stress: Vec<(&str, &SimulationVariant)> = variants
         .iter()
         .map(|(name, variant)| (name.as_str(), variant))
@@ -391,11 +454,31 @@ pub(crate) fn stress_variant(
                 && !name.starts_with("sweep")
         })
         .collect();
-    if stress.len() > 1 {
+    // By length first so `site_2` sorts before `site_10`.
+    stress.sort_unstable_by_key(|(name, _)| (name.len(), *name));
+    if stress.len() > 1 && !stress.iter().all(|(name, _)| is_site_draw(name)) {
         let mut names: Vec<&str> = stress.iter().map(|(name, _)| *name).collect();
         names.sort_unstable();
         return Err(CoreError::InvalidConfig(format!(
-            "expected one stress variant (blackout, scramble or units), found {names:?}"
+            "expected one stress variant (blackout, scramble, units or site) or several site \
+             draws (site_0, site_1, ...), found {names:?}"
+        )));
+    }
+    Ok(stress)
+}
+
+/// `stress_variants` for scoring that takes one variant: several site draws
+/// are refused.
+pub(crate) fn stress_variant(
+    variants: &HashMap<String, SimulationVariant>,
+) -> Result<Option<(&str, &SimulationVariant)>, CoreError> {
+    let mut stress = stress_variants(variants)?;
+    if stress.len() > 1 {
+        return Err(CoreError::InvalidConfig(format!(
+            "{} site draws were loaded, and several draws are scored for classifiers only; \
+             evaluate a regression model on one site at a time (`simulate --site` without \
+             `--site-draws`)",
+            stress.len()
         )));
     }
     Ok(stress.pop())
@@ -420,6 +503,9 @@ struct SingleDatasetScores {
     regression: Option<RegressionScores>,
     sweep: Option<Vec<SweepScores>>,
     oracle: Option<OracleScores>,
+    /// Worst site draw's resiliency; `None` unless site draws were scored.
+    generalizability: Option<f64>,
+    stress: Option<Vec<StressScores>>,
 }
 
 #[cfg(test)]
@@ -442,12 +528,15 @@ mod tests {
     }
 
     fn run_against(clean_x: DataFrame, name: &str, x: DataFrame) -> EvaluationResult {
+        run_variants(clean_x, vec![(name, x)])
+    }
+
+    fn run_variants(clean_x: DataFrame, variants: Vec<(&str, DataFrame)>) -> EvaluationResult {
         let y = df!["target" => [0, 1, 0, 1]].unwrap();
         let clean = SimulationVariant {
             x: clean_x,
             y: y.clone(),
         };
-        let variant = SimulationVariant { x, y };
         let config = EvaluationConfig {
             n_jitter_iters: 0,
             allow_partial: false,
@@ -460,13 +549,89 @@ mod tests {
             .run(
                 &ValModel,
                 &HashMap::from([("d".to_string(), clean)]),
-                &HashMap::from([(
-                    name.to_string(),
-                    HashMap::from([("d".to_string(), variant)]),
-                )]),
+                &variants
+                    .into_iter()
+                    .map(|(name, x)| {
+                        let variant = SimulationVariant { x, y: y.clone() };
+                        (
+                            name.to_string(),
+                            HashMap::from([("d".to_string(), variant)]),
+                        )
+                    })
+                    .collect(),
                 &config,
             )
             .unwrap()
+    }
+
+    #[test]
+    fn stress_section_counts_changed_rows_and_decisions() {
+        let x = df!["val" => ["0.1", "ND", "0.2", "<0.01"]].unwrap();
+        let r = run_with("scramble", x);
+        let stress = r.stress.unwrap();
+        assert_eq!(stress.len(), 1);
+        let s = &stress[0];
+        assert_eq!(
+            (s.variant.as_str(), s.rows, s.rows_changed),
+            ("scramble", 4, 2)
+        );
+        // Both positives lost their value and fell under the threshold.
+        assert_eq!(s.decisions_changed, 2);
+        assert_eq!(s.decision_change_rate, Some(1.0));
+        assert_eq!(s.silent_change_rate, None);
+        // One stress variant is not a set of sites.
+        assert_eq!(r.evaluations.metric_based["roc_auc"].generalizability, 1.0);
+    }
+
+    #[test]
+    fn identity_variant_changes_no_row() {
+        let r = run_with("units", df!["val" => [0.1, 0.8, 0.2, 0.9]].unwrap());
+        let s = &r.stress.as_ref().unwrap()[0];
+        assert_eq!((s.rows_changed, s.decision_change_rate), (0, None));
+        assert_eq!(resiliency(&r), 1.0);
+    }
+
+    #[test]
+    fn generalizability_is_the_worst_site_draw() {
+        let clean = || df!["val" => [0.1, 0.8, 0.2, 0.9]].unwrap();
+        // site_1 loses one positive: it scores 0.0, under both negatives.
+        let worse = df!["val" => [Some(0.1), None, Some(0.2), Some(0.9)]].unwrap();
+        let r = run_variants(clean(), vec![("site_1", worse), ("site_0", clean())]);
+        let scores = &r.evaluations.metric_based["roc_auc"];
+        assert_eq!(scores.generalizability, 0.5);
+        assert_eq!(scores.resiliency, 0.75);
+        let stress = r.stress.unwrap();
+        let names: Vec<&str> = stress.iter().map(|s| s.variant.as_str()).collect();
+        assert_eq!(names, ["site_0", "site_1"]);
+        assert_eq!(stress[1].resiliency, Some(0.5));
+        assert_eq!(
+            (stress[1].rows_changed, stress[1].decisions_changed),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn site_draws_sort_numerically_and_do_not_mix_with_other_variants() {
+        let v = || SimulationVariant {
+            x: df!["val" => [1.0]].unwrap(),
+            y: df!["target" => [0]].unwrap(),
+        };
+        let mut variants: HashMap<String, SimulationVariant> = ["site_10", "site_2", "site_0"]
+            .map(|n| (n.to_string(), v()))
+            .into();
+        let names: Vec<&str> = stress_variants(&variants)
+            .unwrap()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, ["site_0", "site_2", "site_10"]);
+        assert!(stress_variant(&variants)
+            .unwrap_err()
+            .to_string()
+            .contains("3 site draws"));
+
+        variants.insert("scramble".into(), v());
+        assert!(stress_variants(&variants).is_err());
     }
 
     fn resiliency(r: &EvaluationResult) -> f64 {

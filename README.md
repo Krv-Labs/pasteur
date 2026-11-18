@@ -55,7 +55,7 @@ pasteur-cli compare blackout \
   --output results-blackout.json
 ```
 
-`simulate` writes `sim/clean/`, `sim/blackout/`, `sim/jitter/`, and (with `--labels`) `sim/flipper/`; `--scramble-rate` and `--unit-rate` add `sim/scramble/` and `sim/units/`. `compare` scores each ONNX model on the clean and perturbed rows and writes the metrics as JSON. See [Reading the results](https://docs.krv.ai/pasteur/metrics.html) and the [model-selection walkthrough](https://docs.krv.ai/pasteur/model-selection.html).
+`simulate` writes `sim/clean/`, `sim/blackout/`, `sim/jitter/`, and (with `--labels`) `sim/flipper/`; `--scramble-rate`, `--unit-rate` and `--site` add `sim/scramble/`, `sim/units/` and `sim/site/`. `compare` scores each ONNX model on the clean and perturbed rows and writes the metrics as JSON. See [Reading the results](https://docs.krv.ai/pasteur/metrics.html) and the [model-selection walkthrough](https://docs.krv.ai/pasteur/model-selection.html).
 
 From Python:
 

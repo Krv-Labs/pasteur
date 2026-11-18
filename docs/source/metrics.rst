@@ -42,8 +42,16 @@ Metrics
        is a description, not a score. Compare models against each other,
        not against a target value.
    * - ``metric_based.roc_auc.generalizability``
-     - **Not implemented.** Always ``1.0`` in this release.
-     - Ignore it.
+     - The lowest resiliency over the site draws scored (``evaluate site``
+       on a bundle made with ``--site-draws``). ``1.0`` when no site draws
+       were loaded.
+     - The model's worst simulated site, not its average one. With site
+       draws, ``resiliency`` is the mean over them; read the two together.
+       Higher is better.
+   * - ``stress[].decision_change_rate``
+     - Of the rows a stress variant changed, the share whose decision differs
+       from the model's decision on the clean row. See `Stress`_.
+     - 0 means no patient's answer moved. Lower is better.
 
 Caveats
 -------
@@ -66,6 +74,9 @@ the matching metric from each run:
      - ``resiliency``, then ``parse_loss``
    * - ``evaluate units``
      - ``resiliency``
+   * - ``evaluate site``
+     - ``resiliency``, ``stress`` and ``parse_loss``; with site draws also
+       ``generalizability``
    * - ``evaluate jitter``
      - ``jitter_stability`` (needs ``--jitter-iters`` of 2 or more)
    * - ``evaluate flipper``
@@ -102,6 +113,67 @@ become null without an error. They then take ``--null-fill`` or the model's
 variant already loses in the same column. A scramble run with high parse loss
 is close to a blackout run. Sentinels
 such as ``-999`` parse, to wrong values.
+
+Stress
+------
+
+Resiliency is a ratio of two AUCs. It can stay near 1.0 while individual
+patients change sides, because AUC only sees the ranking. The ``stress``
+section counts those patients. It has one entry per stress variant
+(blackout, scramble, units, site, or each site draw) and needs no oracle
+labels: the reference is the model's own decision on the clean row.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Definition
+   * - ``variant``
+     - ``blackout``, ``scramble``, ``units``, ``site``, or ``site_<i>``
+   * - ``roc_auc``, ``resiliency``
+     - This variant's ROC AUC against the clean rows' labels, and its share
+       of the clean ROC AUC. For multi-output models, the mean over labels.
+   * - ``rows``, ``rows_changed``
+     - Rows scored, and rows where at least one feature reaches the model
+       with a different value than in clean
+   * - ``decisions_changed``
+     - Changed rows whose decision differs from the decision on the clean row
+   * - ``decision_change_rate``
+     - ``decisions_changed ÷ rows_changed``; ``null`` when no row changed
+   * - ``silent_change_rate``
+     - As ``decision_change_rate``, not counting rows the model answered with
+       ``--abstain-class``. Present only with that flag.
+
+A decision is ``p ≥ --flip-threshold`` for binary models, the argmax class
+for multiclass, and the set of labels at or over threshold for multilabel.
+
+**"Changed" means changed for the model.** Rows are compared after the same
+lenient numeric cast scoring uses. ``5.2e0`` in place of ``5.2`` is not a
+change. ``<0.01`` in place of ``0.008`` is: it parses to nothing. An identity
+control (a units step with factor 1) must report ``rows_changed: 0``; if it
+does not, distrust the run.
+
+**The same change is not always the same kind of error.** A relabelled unit
+or a different decimal mark keeps the patient's meaning, so the right
+behaviour is the same answer, and every changed decision is a failure. This
+is a metamorphic test [Chen1998]_ [Segura2016]_, the invariance test of
+[Ribeiro2020]_; [Hendrycks2019]_ report the same quantity for image models as
+flip probability. A blacked-out assay or an unlabelled unit destroys
+meaning, so the right behaviour is to refuse. With ``--abstain-class``,
+``silent_change_rate`` counts only the answers that changed without a
+refusal, the reject option of [Chow1970]_ and [Geifman2017]_. To score
+decisions against what the answer *should* be, pass ``--oracle-labels`` and
+read `Oracle labels`_.
+
+**Classifiers only.** A regression model has no decision without a cutoff;
+its results carry no ``stress`` section.
+
+**Why the worst site.** ``generalizability`` is a minimum because a mean over
+sites hides the one a model fails at [Sagawa2020]_ [Koh2021]_. It is still a
+number about simulated sites: declared perturbations of one cohort, not other
+hospitals' patients. Validation on real external cohorts remains the
+standard [Steyerberg2016]_ [Futoma2020]_.
 
 Per-patient predictions
 -----------------------

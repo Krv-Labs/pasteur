@@ -68,6 +68,13 @@ Important options:
    * - ``--unit-factor``, ``--unit-offset``
      - none, ``0``
      - Custom conversion: ``value * factor + offset``
+   * - ``--site``
+     - none
+     - Site file (JSON) of blackout, scramble and units steps applied
+       together; enables site (see :doc:`simulations`)
+   * - ``--site-draws``
+     - none
+     - Write this many random site draws instead of the site as declared
    * - ``--jitter-scale``
      - ``1.0``
      - Noise scale
@@ -148,7 +155,7 @@ Score one local ONNX model:
      --output ./scores.json
 
 The positional simulation type can be ``blackout``, ``jitter``, ``flipper``,
-``sweep`` (classifiers only), ``scramble``, or ``units``.
+``sweep`` (classifiers only), ``scramble``, ``units``, or ``site``.
 Each run loads only that folder; see :doc:`metrics` for which metric to read
 from each.
 
@@ -319,6 +326,19 @@ missing row, a duplicate row, a null prediction or the wrong number of output
 columns is an error; nothing is filled in. ``--contract``, ``--input-name``,
 ``--null-fill`` and ``--positive-class-index`` apply only to ONNX models, and
 multilabel predictions are thresholded at ``--flip-threshold``.
+
+catalog
+-------
+
+Print the perturbation toolkit as JSON: the simulators, the scramble
+encodings, the unit presets with their factors and offsets, and the site-file
+format with a working example. It takes no options and reads no data. It is
+meant for scripts and agents that build a site file without parsing these
+docs:
+
+.. code-block:: bash
+
+   pasteur-cli catalog
 
 cache
 -----

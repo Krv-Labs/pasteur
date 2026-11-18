@@ -4,7 +4,8 @@ use pasteur_core::{
     simulate::sweep::{SWEEP_CASE_ROW_COL, SWEEP_FEATURE_COL, SWEEP_STEP_COL},
     unit_preset, BlackoutConfig, BlackoutSimulator, CoreError, FlipperConfig, FlipperSimulator,
     JitterConfig, JitterSimulator, ScrambleConfig, ScrambleEncoding, ScrambleSimulator, Simulator,
-    SweepConfig, SweepFeature, SweepSimulator, TaskType, UnitsConfig, UnitsSimulator, UNIT_PRESETS,
+    SiteConfig, SiteSimulator, SweepConfig, SweepFeature, SweepSimulator, TaskType, UnitsConfig,
+    UnitsSimulator, UNIT_PRESETS,
 };
 use pasteur_hf::layout;
 use polars::prelude::*;
@@ -19,6 +20,7 @@ pub fn run(args: SimulateArgs) -> Result<()> {
     let blackout = build_blackout(&args)?;
     let scramble = build_scramble(&args)?;
     let units = build_units(&args)?;
+    let site = build_site(&args)?;
     let (features, source_row_id, row_ordinal, provenance) = load_input(&args)?;
     println!(
         "Loaded {} ({} rows x {} cols) [{}]",
@@ -31,6 +33,9 @@ pub fn run(args: SimulateArgs) -> Result<()> {
     // Built first so a bad --sweep fails before any variant is written.
     let sweep = build_sweep(&args, &features, source_row_id.as_materialized_series())?;
     check_feature_columns(&args, &features)?;
+    if let Some(site) = &site {
+        site.check_columns(&features)?;
+    }
 
     write_variant(
         &args.output,
@@ -47,6 +52,7 @@ pub fn run(args: SimulateArgs) -> Result<()> {
     }
     run_scramble(&args, scramble, &features, &source_row_id, &row_ordinal)?;
     run_units(&args, units, &features, &source_row_id, &row_ordinal)?;
+    run_site(&args, site, &features, &source_row_id, &row_ordinal)?;
 
     layout::validate_sim_bundle(&args.output)
         .context("simulation output failed layout validation")?;
@@ -231,6 +237,64 @@ fn run_units(
         "units",
         &with_ids(&out, source_row_id, row_ordinal)?,
     )
+}
+
+/// The validated site simulator, or `None` when `--site` is absent.
+fn build_site(args: &SimulateArgs) -> Result<Option<SiteSimulator>> {
+    let Some(path) = &args.site else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read site file {}", path.display()))?;
+    let mut config: SiteConfig = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "site file {} is not valid (`pasteur-cli catalog` prints the format)",
+            path.display()
+        )
+    })?;
+    config.random_state = Some(args.random_state);
+    let sim = SiteSimulator::new(config);
+    sim.validate()?;
+    Ok(Some(sim))
+}
+
+fn run_site(
+    args: &SimulateArgs,
+    sim: Option<SiteSimulator>,
+    features: &DataFrame,
+    source_row_id: &Column,
+    row_ordinal: &Column,
+) -> Result<()> {
+    let Some(sim) = sim else {
+        println!("  skipped site/ (pass --site to generate)");
+        return Ok(());
+    };
+    // `evaluate site` scores every parquet in site/, so files left by an
+    // earlier run (say, ten draws before these three) would be scored as if
+    // they were current.
+    let dir = args.output.join("site");
+    if dir.is_dir() {
+        for stale in layout::list_parquet_files(&args.output, "site").unwrap_or_default() {
+            std::fs::remove_file(&stale)
+                .with_context(|| format!("failed to remove stale {}", stale.display()))?;
+        }
+    }
+    let draws: Vec<Option<usize>> = match args.site_draws {
+        None => vec![None],
+        Some(n) => (0..n as usize).map(Some).collect(),
+    };
+    for draw in draws {
+        let name = draw.map_or("site".to_string(), |d| format!("site_{d}"));
+        let out = sim.transform_draw(features, draw)?;
+        println!("  site/ {name}: steps {:?}", sim.steps_in(draw));
+        write_variant(
+            &args.output,
+            "site",
+            &name,
+            &with_ids(&out, source_row_id, row_ordinal)?,
+        )?;
+    }
+    Ok(())
 }
 
 fn run_jitter_iters(

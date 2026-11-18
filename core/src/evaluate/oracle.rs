@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::flipper::{find_flip_points, flipper_model_features, multi_crossing};
 use super::multi::{argmax_decision, label_matrix, threshold_decision, Columns};
-use super::{predict_matrix, stress_variant, Model};
+use super::{predict_matrix, stress_variants, Model};
 use crate::error::CoreError;
 use crate::schema::{EvaluationConfig, SimulationVariant, TaskType};
 
@@ -148,7 +148,12 @@ pub(crate) fn score_oracle(
     let mut jitter: Option<JitterTally> = None;
     let mut flipper = None;
     let mut abstain_scores = None;
-    let stress = stress_variant(variants)?.map(|(name, _)| name);
+    // Abstention is scored on a single stress variant. Several site draws
+    // get their per-draw `silent_change_rate` in the `stress` section instead.
+    let stress = match stress_variants(variants)?.as_slice() {
+        [(name, _)] => Some(*name),
+        _ => None,
+    };
     for (name, variant) in variants {
         let is_flipper = name == "flipper";
         let x = if is_flipper {
@@ -176,7 +181,11 @@ pub(crate) fn score_oracle(
     }))
 }
 
-fn abstain_index(task: TaskType, names: &[String], class: &str) -> Result<usize, CoreError> {
+pub(crate) fn abstain_index(
+    task: TaskType,
+    names: &[String],
+    class: &str,
+) -> Result<usize, CoreError> {
     if !matches!(task, TaskType::Multiclass | TaskType::Multilabel) {
         return Err(CoreError::InvalidConfig(format!(
             "--abstain-class names one of the model's classes; a {task} model has none to \
@@ -192,7 +201,7 @@ fn abstain_index(task: TaskType, names: &[String], class: &str) -> Result<usize,
 
 /// Per row, the decision as one bool per output: argmax for multiclass, at
 /// or over threshold otherwise (a binary model is the one-column case).
-fn decisions(task: TaskType, cols: &Columns, thresholds: &[f64]) -> Decisions {
+pub(crate) fn decisions(task: TaskType, cols: &Columns, thresholds: &[f64]) -> Decisions {
     let decide = match task {
         TaskType::Multiclass => argmax_decision,
         _ => threshold_decision,

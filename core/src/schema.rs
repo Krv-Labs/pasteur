@@ -195,7 +195,11 @@ pub struct MetricInvariantScores {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricBasedScores {
+    /// Stress metric ÷ clean metric; the mean over site draws when several
+    /// were scored.
     pub resiliency: f64,
+    /// The worst site draw's resiliency. `1.0` (neutral) unless site draws
+    /// (`site_0`, `site_1`, ...) were scored.
     pub generalizability: f64,
 }
 
@@ -233,6 +237,11 @@ pub struct EvaluationResult {
     /// makes it visible. Summed over datasets; absent when nothing was lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parse_loss: Option<BTreeMap<String, BTreeMap<String, usize>>>,
+    /// One entry per stress variant (blackout, scramble, units, site, or each
+    /// site draw): how many rows changed and how many decisions changed with
+    /// them. Classifiers only; absent when no stress variant was loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stress: Option<Vec<crate::evaluate::StressScores>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
