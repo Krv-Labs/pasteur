@@ -20,7 +20,7 @@ description: Local Pasteur simulation and evaluation CLI (pasteur-cli) for binar
 | Write the dataset card | `pasteur-cli card --input ./sim --source-dataset <id> --dest-repo <id>` |
 | Publish a bundle | `hf repos create <id> --type dataset --private`, then `hf upload` |
 
-`<sim_type>` is `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, `units`, or `site`; resiliency is measured on whichever of blackout, scramble, units or site is loaded. Check `parse_loss` in scramble and site results: values the loader silently nulled. Classifier results also carry `stress`: per variant, `rows_changed` and `decision_change_rate` (changed rows whose decision moved). With site draws, `generalizability` is the worst draw's resiliency. Pass `--oracle-labels <parquet>` instead of `--labels` when perturbations can change the true label. Flags and defaults: [cli/README.md](../../../cli/README.md).
+`<sim_type>` is `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, `units`, or `site`; resiliency is measured on whichever of blackout, scramble, units or site is loaded. Check `parse_loss` in scramble and site results: values the loader silently nulled. Classifier results also carry `stress`: per variant, `rows_changed` and `decision_change_rate` (changed rows whose decision moved). With site draws, `generalizability` is the worst draw's resiliency. Pass `--oracle-labels <parquet>` in addition to `--labels` when perturbations can change the true label. Flags and defaults: [cli/README.md](../../../cli/README.md).
 
 ## Task types
 

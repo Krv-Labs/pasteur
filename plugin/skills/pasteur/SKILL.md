@@ -10,7 +10,7 @@ Run the CLI as `npx -y @krv-labs/pasteur <command> ...`. If `pasteur-cli` is alr
 ## Safety
 
 - The CLI only reads and writes the local paths you pass. It makes no network calls; keep it that way.
-- All Hugging Face Hub I/O goes through the official `hf` CLI: download inputs first, pass local paths, upload results afterwards.
+- All Hugging Face Hub I/O goes through the official `hf` CLI: download inputs first, then pass local paths. Upload only when the user asks, and only what the next rule allows.
 - Never upload or commit patient data, PHI, real clinical datasets or proprietary models. Only publish simulations of public or synthetic data: bundles keep each patient's row ID, so never upload one built from patient data, even to a private repo.
 - Create Hugging Face model and dataset repos as **private** by default (`hf repos create <id> --type dataset --private`).
 
@@ -36,7 +36,7 @@ Run the CLI as `npx -y @krv-labs/pasteur <command> ...`. If `pasteur-cli` is alr
 - Scramble: also read `parse_loss`, the values the loader silently nulled. High parse loss means scramble behaves like blackout. Sentinels (`-999`) parse, to wrong values.
 - Units presets: `glucose_mgdl_to_mmoll`, `creatinine_mgdl_to_umoll`, `cholesterol_mgdl_to_mmoll`, `triglycerides_mgdl_to_mmoll`, `hemoglobin_gdl_to_gl`, `ft4_ngdl_to_pmoll`, `hba1c_ngsp_to_ifcc`, `temp_f_to_c`, `weight_lb_to_kg`. A factor-of-ten slip is `--unit-factor 10`; `--unit-factor 1` is an identity control.
 - `--predictions [NAME=]PATH`: predictions scored outside Pasteur, keyed by `(variant_name, source_row_id)`, one Float64 column per output. Mix with `--model` in `compare`.
-- `--oracle-labels <parquet>` instead of `--labels` when perturbations can change the true label (required for a scored `sweep`). `--abstain-class <class>` names a "cannot decide" output (multiclass/multilabel with oracle labels).
+- `--oracle-labels <parquet>` in addition to `--labels` when perturbations can change the true label (required for a scored `sweep`). `--abstain-class <class>` names a "cannot decide" output (multiclass/multilabel with oracle labels).
 - sklearn-exported models reject NaN: pass `--null-fill 0` or declare `input.absent_sentinel` in `metadata.json`.
 - `--id-col`, `--feature` and `--positive-group-id` default to the example thyroid dataset; always pass them. `compare --output` needs an existing directory.
 
