@@ -22,8 +22,10 @@ Simulation bundle
    │   └── sweep.parquet
    ├── scramble/              # only with --scramble-rate
    │   └── scramble.parquet
-   └── units/                 # only with --unit-rate
-       └── units.parquet
+   ├── units/                 # only with --unit-rate
+   │   └── units.parquet
+   └── site/                  # only with --site
+       └── site.parquet       # or site_0.parquet ... with --site-draws
 
 Every simulation parquet includes:
 
@@ -43,7 +45,8 @@ Every simulation parquet includes:
    * - Feature columns
      - numeric
      - Model inputs carried from or derived from the source cohort. In
-       ``scramble.parquet`` the ``--feature`` column is text
+       ``scramble.parquet`` the ``--feature`` column is text, as is every
+       feature a site file scrambles
 
 Flipper metadata
 ----------------
@@ -102,6 +105,23 @@ high parse loss is close to a blackout run.
 .. code-block:: json
 
    "parse_loss": {"scramble": {"glucose": 41}}
+
+Classifier results that loaded a stress variant (blackout, scramble, units or
+site) add a ``stress`` array, one entry per variant, or per site draw;
+:doc:`metrics` defines each field. ``silent_change_rate`` appears only with
+``--abstain-class``. With site draws, ``generalizability`` is the lowest
+``resiliency`` in this array.
+
+.. code-block:: json
+
+   "stress": [
+     {"variant": "site_0", "roc_auc": 0.84, "resiliency": 0.99,
+      "rows": 300, "rows_changed": 112, "decisions_changed": 4,
+      "decision_change_rate": 0.036},
+     {"variant": "site_1", "roc_auc": 0.71, "resiliency": 0.84,
+      "rows": 300, "rows_changed": 300, "decisions_changed": 57,
+      "decision_change_rate": 0.19}
+   ]
 
 Multiclass and multilabel results add a ``multi`` object. The headline fields
 above hold macro averages; :doc:`metrics` defines each field.

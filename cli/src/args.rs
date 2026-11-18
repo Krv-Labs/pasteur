@@ -28,6 +28,9 @@ pub enum Command {
     Compare(CompareArgs),
     /// List, remove, or clear the local Pasteur staging cache.
     Cache(CacheArgs),
+    /// Print the perturbation toolkit as JSON: simulators, scramble
+    /// encodings, unit presets and the site-file format.
+    Catalog,
 }
 
 /// Mirrors `pasteur_core::TaskType` for clap.
@@ -245,6 +248,16 @@ pub struct SimulateArgs {
     /// Custom conversion offset, added after --unit-factor.
     #[arg(long, requires = "unit_factor", conflicts_with = "unit_preset")]
     pub unit_offset: Option<f64>,
+    /// Site file (JSON): several blackout/scramble/units steps, each on its
+    /// own feature, applied together as one stress variant, the way one
+    /// hospital's export is wrong in several columns at once. Writes site/.
+    /// `pasteur-cli catalog` prints the file format. Without it site/ is skipped.
+    #[arg(long)]
+    pub site: Option<PathBuf>,
+    /// Write this many random site draws (`site_0`, `site_1`, ...) instead of
+    /// the site as declared. Each draw keeps each step with its `chance`.
+    #[arg(long, requires = "site", value_parser = clap::value_parser!(u32).range(1..))]
+    pub site_draws: Option<u32>,
     #[arg(long, default_value = "output")]
     pub output: PathBuf,
 }

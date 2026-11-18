@@ -67,6 +67,8 @@ pasteur-cli simulate \
 | `--unit-rate` | — | Fraction of rows converted; enables units with exactly one of `--unit-preset` or `--unit-factor` |
 | `--unit-preset` | — | Named conversion, e.g. `glucose_mgdl_to_mmoll` ([list](../docs/source/simulations.rst)) |
 | `--unit-factor`, `--unit-offset` | —, `0` | Custom conversion `value * factor + offset` |
+| `--site` | — | Site file (JSON): blackout, scramble and units steps on several features, applied together as one stress variant; enables site ([format](../docs/source/simulations.rst), or `pasteur-cli catalog`) |
+| `--site-draws` | — | Write this many random site draws (`site_<i>`) instead of the site as declared; each draw keeps each step with its `chance` |
 | `--positive-group-id` | `103` | `group_id` for positive cohort (flipper). Repeat once per class/label for `--task multiclass`/`multilabel` |
 | `--task` | `binary` | `binary`, `multiclass`, `multilabel`, or `regression`: how flipper pairs are sampled |
 | `--flip-threshold` | — | Regression only: clinical cutoff (target units) that flipper pairs straddle; omit to skip flipper |
@@ -128,7 +130,7 @@ pasteur-cli evaluate blackout \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `sim_type` | *(positional)* | `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, or `units` |
+| `sim_type` | *(positional)* | `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, `units`, or `site` |
 | `--sim-root` | *(required)* | Local bundle with `clean/` and `<sim_type>/` |
 | `--labels` | *(classifiers)* | Local `groups.parquet` for label derivation. Required for every classifier, even with `--oracle-labels`; regression takes `--targets` instead |
 | `--oracle-labels` | — | Per-row oracle labels parquet (`variant_name`, `source_row_id`, and `label` for binary or one `group_<id>` per `--positive-group-id` for multiclass/multilabel; [schema](../docs/source/metrics.rst#oracle-labels)). Classifiers only |
@@ -175,6 +177,16 @@ The `--output` directory must already exist.
 
 ---
 
+### `catalog`
+
+Print the perturbation toolkit as JSON: simulators, scramble encodings, unit presets with factor and offset, and the site-file format with a working example. No options, no data read. For scripts and agents that build a site file.
+
+```bash
+pasteur-cli catalog
+```
+
+---
+
 ### `cache`
 
 Manage the local Pasteur staging cache (`$PASTEUR_RS_CACHE_DIR`, OS cache `…/pasteur-rs`, or `./.pasteur-rs-cache`). Separate from the Hugging Face Hub cache (`hf cache …`).
@@ -202,7 +214,7 @@ pasteur-cli cache clear --kind simulations
 
 Defined in [`core/src/schema.rs`](../core/src/schema.rs):
 
-- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel), `regression`, `oracle` (when `--oracle-labels` is passed), and `sweep` (for `sweep` evaluations) sections, and `parse_loss` (stress-variant values that became null when cast to numbers)
+- **`EvaluationResult`**: `baselines`, `evaluations.metric_invariant`, `evaluations.metric_based`, `created_at`, plus optional `multi` (multiclass/multilabel), `regression`, `oracle` (when `--oracle-labels` is passed), and `sweep` (for `sweep` evaluations) sections, `parse_loss` (stress-variant values that became null when cast to numbers), and `stress` (per stress variant or site draw: rows changed and decisions changed)
 - **`ComparisonResult`**: `evaluations: [{ model_label, evaluation }]`
 
 ---

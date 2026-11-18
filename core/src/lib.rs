@@ -15,5 +15,5 @@ pub use simulate::{
     flipper::{is_flipper_meta_column, FLIPPER_META_COLS, PAIR_ID_COL, PAIR_LABEL_COL, STEP_COL},
     sweep::{is_sweep_meta_column, SWEEP_META_COLS},
     unit_preset, BlackoutSimulator, FlipperSimulator, JitterSimulator, ScrambleSimulator,
-    Simulator, SweepSimulator, UnitsSimulator, UNIT_PRESETS,
+    Simulator, SiteConfig, SiteSimulator, SiteStep, SweepSimulator, UnitsSimulator, UNIT_PRESETS,
 };
