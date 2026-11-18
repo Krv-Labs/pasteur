@@ -13,6 +13,23 @@
   `units/`.
 - `parse_loss` in `evaluate`/`compare` JSON: per variant and column, values
   that were present but became null when cast to numbers. Omitted when zero.
+- Site simulator (`simulate --site site.json`): a site file lists blackout,
+  scramble and units steps, each on its own feature, and applies them
+  together as one stress variant, the way one hospital's export is wrong in
+  several columns at once. Writes `site/`. Each step picks its own rows. A
+  bad rate, preset, field or column stops the run before anything is written.
+- `simulate --site-draws N`: writes `site_0` to `site_<N-1>`, each a random
+  draw that keeps each step with its `chance`. `evaluate site` scores every
+  draw (classifiers only).
+- `stress` in `evaluate`/`compare` JSON for classifiers: per stress variant
+  or site draw, `rows_changed`, `decisions_changed` and
+  `decision_change_rate` (changed rows whose decision differs from the
+  decision on the clean row). Needs no oracle labels. `silent_change_rate`
+  is added with `--abstain-class`, which does need them.
+- `pasteur-cli catalog`: the simulators, scramble encodings, unit presets and
+  site-file format as JSON, for scripts and agents.
+- A References page in the docs: the literature behind each simulator and
+  metric.
 
 ### Changed
 
@@ -21,6 +38,9 @@
   any other was silently ignored. Regression's `blackout_rmse`/`blackout_r2`
   keep their names and hold the stress variant's numbers. The same goes for
   `oracle.abstain` (`--abstain-class`), which scored only blackout before.
+- `generalizability` is now the lowest resiliency over the site draws scored.
+  It was a placeholder that always read `1.0`, and still reads `1.0` when no
+  site draws are loaded. With site draws, `resiliency` is their mean.
 
 ## 0.5.0
 
