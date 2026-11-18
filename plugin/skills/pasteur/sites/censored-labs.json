@@ -1,0 +1,3 @@
+{"steps": [
+  {"scramble": {"feature": "FEATURE", "rate": 0.2, "encodings": ["censored", "sentinel"]}}
+]}

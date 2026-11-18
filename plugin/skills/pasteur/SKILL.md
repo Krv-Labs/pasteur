@@ -22,13 +22,17 @@ Run the CLI as `npx -y @krv-labs/pasteur <command> ...`. If `pasteur-cli` is alr
 | Add a sweep | `... --sweep <feature>[=<cutoff>] --sweep-range LO:HI [--sweep-relative-to <cutoff>]` |
 | Add scramble (opt-in) | `... --scramble-rate 0.2 [--scramble-encoding numeric-text\|censored\|unit-suffix\|sentinel ...]` (default: all four) |
 | Add units (opt-in) | `... --unit-rate 0.2 --unit-preset <name>` or `--unit-factor F [--unit-offset O]` |
+| Add a site (opt-in) | `... --site site.json [--site-draws N]`: several blackout/scramble/units steps on different features as one variant. Templates: [sites/](sites/README.md) |
+| List the toolkit as JSON | `pasteur catalog`: simulators, encodings, unit presets, site-file format |
 | Score one model or predictions table | `pasteur evaluate <sim_type> --sim-root ./sim --labels <groups.parquet> (--model m.onnx \| --predictions p.parquet) -o out.json` |
 | Score several | `pasteur compare <sim_type> --sim-root ./sim --labels ... --model a.onnx --predictions rules=b.parquet [--predictions-out preds.parquet] -o out.json` |
 | Write a dataset card | `pasteur card --input ./sim --source-dataset <id> --dest-repo <id>` |
 
-`<sim_type>` is positional: `blackout`, `jitter`, `flipper`, `sweep`, `scramble` or `units`. Each run loads one type; metrics for types not loaded sit at neutral values.
+`<sim_type>` is positional: `blackout`, `jitter`, `flipper`, `sweep`, `scramble`, `units` or `site`. Each run loads one type; metrics for types not loaded sit at neutral values.
 
-- Resiliency (`metric_based.*.resiliency`, stress AUC / clean AUC) is measured on whichever of blackout, scramble or units is loaded.
+- Resiliency (`metric_based.*.resiliency`, stress AUC / clean AUC) is measured on whichever of blackout, scramble, units or site is loaded.
+- `stress` (classifiers): per stress variant, `rows_changed` and `decision_change_rate`, the share of changed rows whose decision moved. An AUC ratio can hide these.
+- Site draws (`--site-draws N`): `evaluate site` scores every draw; `generalizability` is the worst draw's resiliency and `resiliency` their mean. For "will this hold on another site's export?" run `/pasteur:generalizability`.
 - Scramble: also read `parse_loss`, the values the loader silently nulled. High parse loss means scramble behaves like blackout. Sentinels (`-999`) parse, to wrong values.
 - Units presets: `glucose_mgdl_to_mmoll`, `creatinine_mgdl_to_umoll`, `cholesterol_mgdl_to_mmoll`, `triglycerides_mgdl_to_mmoll`, `hemoglobin_gdl_to_gl`, `ft4_ngdl_to_pmoll`, `hba1c_ngsp_to_ifcc`, `temp_f_to_c`, `weight_lb_to_kg`. A factor-of-ten slip is `--unit-factor 10`; `--unit-factor 1` is an identity control.
 - `--predictions [NAME=]PATH`: predictions scored outside Pasteur, keyed by `(variant_name, source_row_id)`, one Float64 column per output. Mix with `--model` in `compare`.
@@ -60,6 +64,7 @@ sim/
   sweep/sweep.parquet       # only with --sweep
   scramble/scramble.parquet # only with --scramble-rate
   units/units.parquet       # only with --unit-rate
+  site/site.parquet         # only with --site; site_<i>.parquet with --site-draws
 ```
 
 Pasteur reports evidence about behaviour under declared perturbations, not a pass/fail badge. Docs: https://docs.krv.ai/pasteur/ (metrics: `metrics.html`, simulators: `simulations.html`).

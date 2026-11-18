@@ -1,0 +1,4 @@
+{"steps": [
+  {"units": {"feature": "FEATURE", "preset": "PRESET", "rate": 1.0}},
+  {"scramble": {"feature": "FEATURE", "rate": 1.0, "encodings": ["numeric_text"]}}
+]}

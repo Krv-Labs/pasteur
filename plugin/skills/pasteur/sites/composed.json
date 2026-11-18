@@ -1,0 +1,5 @@
+{"steps": [
+  {"blackout": {"feature": "FEATURE_A", "companions": [], "rate": 1.0, "chance": 0.3}},
+  {"units": {"feature": "FEATURE_B", "preset": "PRESET", "rate": 1.0, "chance": 0.5}},
+  {"scramble": {"feature": "FEATURE_B", "rate": 0.2, "encodings": ["censored", "numeric_text"], "chance": 0.5}}
+]}

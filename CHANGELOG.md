@@ -4,6 +4,10 @@
 
 ### Added
 
+- Claude Code plugin: a `/pasteur:generalizability` command that sources a
+  public dataset, runs site files and site draws against a model and
+  reports the worst simulated site, plus site-file templates in the Pasteur
+  skill.
 - npm package `@krv-labs/pasteur`: a prebuilt CLI for macOS, Linux and
   Windows, run with `npx -y @krv-labs/pasteur` or installed as `pasteur-cli`
   (alias `pasteur`). The same binaries are attached to each GitHub release.
