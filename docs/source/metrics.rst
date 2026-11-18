@@ -122,6 +122,8 @@ patients change sides, because AUC only sees the ranking. The ``stress``
 section counts those patients. It has one entry per stress variant
 (blackout, scramble, units, site, or each site draw) and needs no oracle
 labels: the reference is the model's own decision on the clean row.
+``silent_change_rate`` is the exception, because ``--abstain-class`` is
+passed together with ``--oracle-labels``.
 
 .. list-table::
    :header-rows: 1
@@ -489,9 +491,10 @@ multilabel.
        Those pairs have no true boundary to compare against.
    * - ``oracle.abstain``
      - With ``--abstain-class``, on the stress variant's rows (blackout,
-       scramble or units, whichever is loaded). Omitted when none is
-       loaded (``jitter``, ``flipper``, ``sweep``), so one set of flags
-       works for every simulation type.
+       scramble, units or a single site, whichever is loaded). Omitted
+       when none is loaded (``jitter``, ``flipper``, ``sweep``) and for
+       several site draws, so one set of flags works for every
+       simulation type.
        ``abstain_when_missing``: of the rows where the oracle abstains, the
        share where the model abstains too (higher is better).
        ``decided_when_missing``: the share where it chose another class

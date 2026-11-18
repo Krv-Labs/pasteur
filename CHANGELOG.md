@@ -24,8 +24,8 @@
 - `stress` in `evaluate`/`compare` JSON for classifiers: per stress variant
   or site draw, `rows_changed`, `decisions_changed` and
   `decision_change_rate` (changed rows whose decision differs from the
-  decision on the clean row), plus `silent_change_rate` with
-  `--abstain-class`. Needs no oracle labels.
+  decision on the clean row). Needs no oracle labels. `silent_change_rate`
+  is added with `--abstain-class`, which does need them.
 - `pasteur-cli catalog`: the simulators, scramble encodings, unit presets and
   site-file format as JSON, for scripts and agents.
 - A References page in the docs: the literature behind each simulator and

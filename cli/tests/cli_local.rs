@@ -2373,3 +2373,28 @@ fn catalog_prints_the_toolkit_as_json() {
     assert_eq!(catalog["scramble_encodings"].as_array().unwrap().len(), 4);
     assert!(catalog["site_file"]["example"]["steps"].is_array());
 }
+
+#[test]
+fn rerun_removes_old_site_draws_and_nothing_else() {
+    let root = temp_dir("site-stale");
+    let (out, sim_root, _) = simulate_site(
+        &root,
+        r#"{"steps": [{"blackout": {"feature": "f1", "rate": 0.5}}]}"#,
+        &["--site-draws", "2"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let site = sim_root.join("site");
+    assert!(site.join("site_1.parquet").exists());
+    fs::copy(site.join("site_1.parquet"), site.join("mine.parquet")).unwrap();
+
+    let (out, _, _) = simulate_binary(&root, &[]);
+    assert!(out.status.success());
+    assert!(!site.join("site_0.parquet").exists());
+    assert!(!site.join("site_1.parquet").exists());
+    assert!(site.join("mine.parquet").exists());
+    let _ = fs::remove_dir_all(&root);
+}

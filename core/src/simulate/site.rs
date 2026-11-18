@@ -177,6 +177,10 @@ pub struct SiteSimulator {
     config: SiteConfig,
 }
 
+fn in_step(i: usize, msg: String) -> CoreError {
+    CoreError::InvalidConfig(format!("site step {i}: {msg}"))
+}
+
 impl SiteSimulator {
     pub fn new(config: SiteConfig) -> Self {
         Self { config }
@@ -191,8 +195,6 @@ impl SiteSimulator {
                 "a site needs at least one step".to_string(),
             ));
         }
-        let in_step =
-            |i: usize, msg: String| CoreError::InvalidConfig(format!("site step {i}: {msg}"));
         let mut scrambled: Vec<&str> = Vec::new();
         for (i, step) in steps.iter().enumerate() {
             if !(0.0..=1.0).contains(&step.chance()) {
@@ -223,11 +225,25 @@ impl SiteSimulator {
         Ok(())
     }
 
-    /// Fails when a step names a column `df` does not have.
+    /// Fails when a step names a column `df` does not have, or when a units
+    /// or scramble step names one that is not numeric: both would cast it
+    /// leniently and null every value without an error.
     pub fn check_columns(&self, df: &DataFrame) -> Result<(), CoreError> {
-        for name in self.config.steps.iter().flat_map(SiteStep::columns) {
-            if df.column(name).is_err() {
-                return Err(CoreError::FeatureNotFound(name.to_string()));
+        for (i, step) in self.config.steps.iter().enumerate() {
+            for name in step.columns() {
+                if df.column(name).is_err() {
+                    return Err(CoreError::FeatureNotFound(name.to_string()));
+                }
+            }
+            let dtype = df.column(step.feature())?.dtype();
+            if !matches!(step, SiteStep::Blackout { .. }) && !dtype.is_numeric() {
+                return Err(in_step(
+                    i,
+                    format!(
+                        "feature {:?} is {dtype}, but units and scramble steps need a numeric column",
+                        step.feature()
+                    ),
+                ));
             }
         }
         Ok(())

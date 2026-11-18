@@ -187,13 +187,6 @@ impl Evaluator {
                     .filter(|s| s.oracle.is_some())
                     .count(),
             ),
-            (
-                "stress",
-                per_dataset_scores
-                    .iter()
-                    .filter(|s| s.stress.is_some())
-                    .count(),
-            ),
         ] {
             if n > 1 {
                 return Err(CoreError::InvalidConfig(format!(
@@ -204,7 +197,16 @@ impl Evaluator {
         }
         let sweep = per_dataset_scores.iter_mut().find_map(|s| s.sweep.take());
         let oracle = per_dataset_scores.iter_mut().find_map(|s| s.oracle.take());
-        let stress = per_dataset_scores.iter_mut().find_map(|s| s.stress.take());
+        // Row counts from different datasets do not add up to one answer, so
+        // `stress` is reported only when a single dataset has it.
+        let with_stress = per_dataset_scores
+            .iter()
+            .filter(|s| s.stress.is_some())
+            .count();
+        let stress = per_dataset_scores
+            .iter_mut()
+            .find_map(|s| s.stress.take())
+            .filter(|_| with_stress == 1);
         let (multi, regression): (Vec<_>, Vec<_>) = per_dataset_scores
             .into_iter()
             .map(|s| (s.multi, s.regression))

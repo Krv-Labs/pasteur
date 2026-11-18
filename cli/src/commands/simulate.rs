@@ -265,20 +265,28 @@ fn run_site(
     source_row_id: &Column,
     row_ordinal: &Column,
 ) -> Result<()> {
+    // `evaluate site` scores every parquet in site/, so files left by an
+    // earlier run (say, ten draws before these three, or a run with --site
+    // before one without) would be scored against the new clean rows. Only
+    // names this command writes are removed: site.parquet, site_<i>.parquet.
+    let dir = args.output.join("site");
+    if dir.is_dir() {
+        for stale in layout::list_parquet_files(&args.output, "site").unwrap_or_default() {
+            let stem = stale.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let ours = stem == "site"
+                || stem
+                    .strip_prefix("site_")
+                    .is_some_and(|i| !i.is_empty() && i.bytes().all(|b| b.is_ascii_digit()));
+            if ours {
+                std::fs::remove_file(&stale)
+                    .with_context(|| format!("failed to remove stale {}", stale.display()))?;
+            }
+        }
+    }
     let Some(sim) = sim else {
         println!("  skipped site/ (pass --site to generate)");
         return Ok(());
     };
-    // `evaluate site` scores every parquet in site/, so files left by an
-    // earlier run (say, ten draws before these three) would be scored as if
-    // they were current.
-    let dir = args.output.join("site");
-    if dir.is_dir() {
-        for stale in layout::list_parquet_files(&args.output, "site").unwrap_or_default() {
-            std::fs::remove_file(&stale)
-                .with_context(|| format!("failed to remove stale {}", stale.display()))?;
-        }
-    }
     let draws: Vec<Option<usize>> = match args.site_draws {
         None => vec![None],
         Some(n) => (0..n as usize).map(Some).collect(),

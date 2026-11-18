@@ -245,8 +245,10 @@ which patients are hit:
 scores every draw: ``resiliency`` is the mean over draws,
 ``generalizability`` is the worst draw, and ``stress`` lists each one (see
 :doc:`metrics`). Without ``--site-draws`` the site is written as declared,
-every step applied, and ``chance`` is not used. Re-running into the same
-output replaces the earlier ``site/`` files.
+every step applied, and ``chance`` is not used. A draw can keep no step at
+all; it then equals clean and counts as a site with nothing wrong.
+Re-running ``simulate`` into the same output removes the earlier
+``site.parquet`` and ``site_<i>.parquet`` files, with or without ``--site``.
 
 This is domain randomization [Tobin2017]_ applied to exports: if a model
 holds across many simulated sites, a real site is more likely to look like
