@@ -1,4 +1,27 @@
+use rand::prelude::*;
 use sha2::{Digest, Sha256};
+
+/// Seeded row selection shared by the row-level simulators: shuffle the row
+/// positions and mark the first `n_rows * rate` of them. Matches
+/// blackout.py's `_fit_row_mode`: truncating int(), not ceil().
+pub(super) fn row_mask(n_rows: usize, rate: f64, rng: &mut StdRng) -> Vec<bool> {
+    let n_selected = ((n_rows as f64 * rate) as usize).min(n_rows);
+    let mut indices: Vec<usize> = (0..n_rows).collect();
+    indices.shuffle(rng);
+    let mut mask = vec![false; n_rows];
+    for &idx in &indices[..n_selected] {
+        mask[idx] = true;
+    }
+    mask
+}
+
+/// `StdRng` seeded from `random_state`, or from entropy when it is unset.
+pub(super) fn seeded_rng(random_state: Option<u64>) -> StdRng {
+    match random_state {
+        Some(seed) => StdRng::seed_from_u64(seed),
+        None => StdRng::from_entropy(),
+    }
+}
 
 // Shared deterministic RNG helpers
 //

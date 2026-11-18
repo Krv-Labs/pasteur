@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlackoutConfig {
@@ -23,6 +24,52 @@ pub struct BlackoutConfig {
 pub struct JitterConfig {
     pub feature: String,
     pub scale: f64,
+    pub random_state: Option<u64>,
+}
+
+/// How a scrambled row is re-encoded. Each mimics a real export habit; some
+/// still parse as numbers (sentinels, `5.2e0`) and some do not (`<0.01`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrambleEncoding {
+    /// `5,2`, `1,200.5`, ` 5.2 `, `5.2e0`.
+    NumericText,
+    /// `<0.01`, `>500`, `ND`, `QNS`.
+    Censored,
+    /// `5.2 mg/dL`.
+    UnitSuffix,
+    /// `-999`, `9999`: numeric stand-ins for missing.
+    Sentinel,
+}
+
+impl ScrambleEncoding {
+    pub const ALL: [ScrambleEncoding; 4] = [
+        ScrambleEncoding::NumericText,
+        ScrambleEncoding::Censored,
+        ScrambleEncoding::UnitSuffix,
+        ScrambleEncoding::Sentinel,
+    ];
+}
+
+/// Re-encodes a seeded `rate` of `feature`'s rows as text the way a messy
+/// export would. The whole column becomes a string column; untouched rows
+/// keep a representation that parses back to the same value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrambleConfig {
+    pub feature: String,
+    pub rate: f64,
+    pub encodings: Vec<ScrambleEncoding>,
+    pub random_state: Option<u64>,
+}
+
+/// Rewrites a seeded `rate` of `feature`'s rows as `value * factor + offset`,
+/// a site exporting the same analyte in another unit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnitsConfig {
+    pub feature: String,
+    pub factor: f64,
+    pub offset: f64,
+    pub rate: f64,
     pub random_state: Option<u64>,
 }
 
@@ -179,6 +226,13 @@ pub struct EvaluationResult {
     /// only when a `sweep` variant was scored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<Vec<crate::evaluate::SweepScores>>,
+    /// Values in the stress variant (blackout, scramble or units), per column,
+    /// that were present in the file but
+    /// became null when cast to numbers for the model. Scoring casts
+    /// leniently, so text like `<0.01` turns into silent missingness; this
+    /// makes it visible. Summed over datasets; absent when nothing was lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_loss: Option<BTreeMap<String, BTreeMap<String, usize>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,9 +243,10 @@ pub struct RegressionScores {
     /// Standard deviation of the true target on the clean cohort. Jitter
     /// stability is scaled by its square, so it reads the same in any unit.
     pub target_sd: f64,
-    /// RMSE on the blackout variant.
+    /// RMSE on the stress variant (blackout, scramble or units; the field
+    /// name predates the latter two).
     pub blackout_rmse: Option<f64>,
-    /// R² on the blackout variant; `metric_based.r2.resiliency` is this
+    /// R² on the stress variant; `metric_based.r2.resiliency` is this
     /// divided by `baselines.r2`.
     pub blackout_r2: Option<f64>,
     /// Mean per-patient standard deviation of the prediction across jitter

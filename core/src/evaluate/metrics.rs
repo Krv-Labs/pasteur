@@ -1,5 +1,6 @@
 use crate::error::CoreError;
 use polars::prelude::*;
+use std::collections::BTreeMap;
 
 pub const JITTER_STABILITY_ALPHA: f64 = 100.0;
 
@@ -100,9 +101,40 @@ pub(crate) fn series_to_f64(s: &Series) -> Result<Vec<f64>, CoreError> {
     Ok(cast.f64()?.iter().map(|v| v.unwrap_or(f64::NAN)).collect())
 }
 
+/// Per column, how many non-null values become null under the same lenient
+/// `Float64` cast the model scoring applies (e.g. `"<0.01"`, `"ND"`). Only
+/// columns that lose something are listed. A column polars cannot cast at
+/// all is skipped: scoring would fail on it loudly anyway, and so is the row
+/// key (`variant_name`, `source_row_id`), which is text by design. The
+/// evaluator reports a stress variant's loss beyond clean's, so a text column
+/// already in the data is not blamed on the variant.
+pub fn parse_loss(x: &DataFrame) -> BTreeMap<String, usize> {
+    x.columns()
+        .iter()
+        .filter(|c| !matches!(c.name().as_str(), "variant_name" | "source_row_id"))
+        .filter_map(|c| {
+            let cast = c.cast(&DataType::Float64).ok()?;
+            let lost = (c.len() - c.null_count()).saturating_sub(cast.len() - cast.null_count());
+            (lost > 0).then(|| (c.name().to_string(), lost))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_loss_counts_values_the_cast_drops() {
+        let df = df![
+            "s" => [Some("1.5"), Some("<0.01"), Some("ND"), None, Some("-999")],
+            "n" => [1.0, 2.0, 3.0, 4.0, 5.0],
+            "variant_name" => ["scramble"; 5],
+            "source_row_id" => ["a", "b", "c", "d", "e"],
+        ]
+        .unwrap();
+        assert_eq!(parse_loss(&df), BTreeMap::from([("s".to_string(), 2)]));
+    }
 
     #[test]
     fn jitter_stability_is_one_with_fewer_than_two_variants() {

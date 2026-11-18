@@ -10,7 +10,7 @@ pub use flipper::{
     score_flipper_grid, FlipperPairResult, FlipperScores,
 };
 pub use metrics::{
-    calculate_jitter_stability, calculate_roc_auc, mean_jitter_variance, roc_auc,
+    calculate_jitter_stability, calculate_roc_auc, mean_jitter_variance, parse_loss, roc_auc,
     JITTER_STABILITY_ALPHA,
 };
 pub use oracle::{OracleConfig, OracleScores};
@@ -28,7 +28,7 @@ use multi::{
     label_resiliency, mean_some, multi_output_scores, per_label_auc, Columns, LabelBreakdown,
 };
 use polars::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub trait Model {
     /// One `Float64` column per output, in the model's class order: a single
@@ -110,6 +110,7 @@ impl Evaluator {
         config: &EvaluationConfig,
     ) -> Result<EvaluationResult, CoreError> {
         let mut per_dataset_scores = Vec::new();
+        let mut parse_losses: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
 
         for (dataset_name, clean_dataset) in clean_datasets {
             let dataset_variants: HashMap<String, SimulationVariant> = simulation_variants
@@ -120,6 +121,24 @@ impl Evaluator {
                     Some((variant_name.clone(), variant.clone()))
                 })
                 .collect();
+            // Only the stress variant can carry re-encoded text; flipper grids
+            // keep id columns like `pair_0_step_3` that would count as lost.
+            // Loss clean already has (a text column like `site`) is the data's,
+            // not the variant's, so only the excess is reported.
+            if let Some((variant_name, variant)) = stress_variant(&dataset_variants)? {
+                let clean_loss = parse_loss(&clean_dataset.x);
+                for (column, lost) in parse_loss(&variant.x) {
+                    let extra = lost.saturating_sub(clean_loss.get(&column).copied().unwrap_or(0));
+                    if extra == 0 {
+                        continue;
+                    }
+                    *parse_losses
+                        .entry(variant_name.to_string())
+                        .or_default()
+                        .entry(column)
+                        .or_default() += extra;
+                }
+            }
             per_dataset_scores.push(self.run_single_dataset(
                 model,
                 clean_dataset,
@@ -203,6 +222,7 @@ impl Evaluator {
             regression,
             oracle,
             sweep,
+            parse_loss: (!parse_losses.is_empty()).then_some(parse_losses),
         })
     }
 
@@ -257,11 +277,11 @@ impl Evaluator {
         let baseline = mean_some(auc.iter().copied()).unwrap_or(0.5);
 
         let mut variant_probs: HashMap<String, Columns> = HashMap::new();
-        let resiliency = match simulated_variants.get("blackout") {
-            Some(blackout) => {
-                let p = predict_matrix(model, &blackout.x, k)?;
+        let resiliency = match stress_variant(simulated_variants)? {
+            Some((name, stress)) => {
+                let p = predict_matrix(model, &stress.x, k)?;
                 let stressed = per_label_auc(&y, &p);
-                variant_probs.insert("blackout".to_string(), p);
+                variant_probs.insert(name.to_string(), p);
                 label_resiliency(task, &auc, &stressed)
             }
             None => vec![None; k],
@@ -354,6 +374,33 @@ impl Evaluator {
     }
 }
 
+/// The variant resiliency is measured on: whichever is not clean, jitter,
+/// flipper or sweep (blackout, scramble or units). Evaluation loads one
+/// simulation type at a time, so there should be at most one; more (say, two
+/// parquet files in `scramble/`) is an error rather than a hash-order pick.
+pub(crate) fn stress_variant(
+    variants: &HashMap<String, SimulationVariant>,
+) -> Result<Option<(&str, &SimulationVariant)>, CoreError> {
+    let mut stress: Vec<(&str, &SimulationVariant)> = variants
+        .iter()
+        .map(|(name, variant)| (name.as_str(), variant))
+        .filter(|(name, _)| {
+            *name != "clean"
+                && *name != "flipper"
+                && !name.starts_with("jitter")
+                && !name.starts_with("sweep")
+        })
+        .collect();
+    if stress.len() > 1 {
+        let mut names: Vec<&str> = stress.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        return Err(CoreError::InvalidConfig(format!(
+            "expected one stress variant (blackout, scramble or units), found {names:?}"
+        )));
+    }
+    Ok(stress.pop())
+}
+
 /// The metric that `metric_based` is keyed by, and the `baselines` keys, in
 /// the order `SingleDatasetScores::baselines` holds them.
 fn baseline_keys(task: TaskType) -> (&'static str, &'static [&'static str]) {
@@ -373,4 +420,123 @@ struct SingleDatasetScores {
     regression: Option<RegressionScores>,
     sweep: Option<Vec<SweepScores>>,
     oracle: Option<OracleScores>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Scores `val` directly, the way an ONNX model casts it: leniently,
+    /// unparseable text becoming missing (here 0.0).
+    struct ValModel;
+    impl Model for ValModel {
+        fn predict_proba(&self, df: &DataFrame) -> Result<DataFrame, CoreError> {
+            let v = df.column("val")?.cast(&DataType::Float64)?;
+            let p: Vec<f64> = v.f64()?.iter().map(|x| x.unwrap_or(0.0)).collect();
+            Ok(df!["p" => p]?)
+        }
+    }
+
+    fn run_with(name: &str, x: DataFrame) -> EvaluationResult {
+        run_against(df!["val" => [0.1, 0.8, 0.2, 0.9]].unwrap(), name, x)
+    }
+
+    fn run_against(clean_x: DataFrame, name: &str, x: DataFrame) -> EvaluationResult {
+        let y = df!["target" => [0, 1, 0, 1]].unwrap();
+        let clean = SimulationVariant {
+            x: clean_x,
+            y: y.clone(),
+        };
+        let variant = SimulationVariant { x, y };
+        let config = EvaluationConfig {
+            n_jitter_iters: 0,
+            allow_partial: false,
+            metrics: vec!["roc_auc".into()],
+            flip_threshold: 0.5,
+            task: TaskType::Binary,
+            oracle: None,
+        };
+        Evaluator::new()
+            .run(
+                &ValModel,
+                &HashMap::from([("d".to_string(), clean)]),
+                &HashMap::from([(
+                    name.to_string(),
+                    HashMap::from([("d".to_string(), variant)]),
+                )]),
+                &config,
+            )
+            .unwrap()
+    }
+
+    fn resiliency(r: &EvaluationResult) -> f64 {
+        r.evaluations.metric_based["roc_auc"].resiliency
+    }
+
+    #[test]
+    fn scramble_variant_drives_resiliency_and_reports_parse_loss() {
+        let x = df!["val" => ["0.1", "ND", "0.2", "<0.01"]].unwrap();
+        let r = run_with("scramble", x);
+        assert!(resiliency(&r) < 1.0);
+        let expected = BTreeMap::from([(
+            "scramble".to_string(),
+            BTreeMap::from([("val".to_string(), 2)]),
+        )]);
+        assert_eq!(r.parse_loss, Some(expected));
+    }
+
+    #[test]
+    fn blackout_run_has_no_parse_loss() {
+        let x = df!["val" => [Some(0.1), None, Some(0.2), None]].unwrap();
+        let r = run_with("blackout", x);
+        assert!(resiliency(&r) < 1.0);
+        assert_eq!(r.parse_loss, None);
+    }
+
+    #[test]
+    fn parse_loss_already_in_clean_is_not_reported() {
+        let site = ["A"; 4];
+        let clean = || df!["val" => [0.1, 0.8, 0.2, 0.9], "site" => site].unwrap();
+        let blackout = df!["val" => [Some(0.1), None, Some(0.2), None], "site" => site].unwrap();
+        assert_eq!(run_against(clean(), "blackout", blackout).parse_loss, None);
+
+        let scramble = df!["val" => ["0.1", "ND", "0.2", "<0.01"], "site" => site].unwrap();
+        let expected = BTreeMap::from([(
+            "scramble".to_string(),
+            BTreeMap::from([("val".to_string(), 2)]),
+        )]);
+        assert_eq!(
+            run_against(clean(), "scramble", scramble).parse_loss,
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn flipper_id_columns_are_not_parse_loss() {
+        let x = df![
+            "val" => [0.1, 0.8, 0.2, 0.9],
+            "source_row_id" => ["pair_0_step_0", "pair_0_step_1", "pair_1_step_0", "pair_1_step_1"],
+        ]
+        .unwrap();
+        let mut variants = HashMap::from([(
+            "flipper".to_string(),
+            SimulationVariant {
+                x,
+                y: df!["target" => [0, 0, 0, 0]].unwrap(),
+            },
+        )]);
+        assert!(stress_variant(&variants).unwrap().is_none());
+
+        let stress = |x| SimulationVariant {
+            x,
+            y: df!["target" => [0, 1, 0, 1]].unwrap(),
+        };
+        variants.insert("scramble".into(), stress(df!["val" => ["1"]].unwrap()));
+        variants.insert("units".into(), stress(df!["val" => [1.0]].unwrap()));
+        let err = stress_variant(&variants).unwrap_err();
+        assert!(
+            err.to_string().contains("[\"scramble\", \"units\"]"),
+            "{err}"
+        );
+    }
 }

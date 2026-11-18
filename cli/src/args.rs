@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use pasteur_core::TaskType;
+use pasteur_core::{ScrambleEncoding, TaskType};
 
 #[derive(Parser)]
 #[command(
@@ -16,7 +16,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Run Blackout/Jitter/Flipper simulators over a local clean parquet file.
+    /// Run Blackout/Jitter/Flipper (and opt-in Scramble/Units) simulators over a local clean parquet file.
     Simulate(SimulateArgs),
     /// Write a Hugging Face dataset card (README.md) for a simulation bundle.
     Card(CardArgs),
@@ -225,6 +225,26 @@ pub struct SimulateArgs {
     pub flipper_steps: usize,
     #[command(flatten)]
     pub sweep: SweepArgs,
+    /// Fraction of --feature rows re-encoded as messy export text
+    /// (`5,2`, `<0.01`, `5.2 mg/dL`, `-999`). Without it scramble/ is skipped.
+    #[arg(long)]
+    pub scramble_rate: Option<f64>,
+    /// Encoding scrambled rows may take (repeatable). Default: all four.
+    #[arg(long = "scramble-encoding", value_enum, requires = "scramble_rate")]
+    pub scramble_encodings: Vec<ScrambleEncodingArg>,
+    /// Fraction of --feature rows rewritten as `value * factor + offset`, a
+    /// site exporting the analyte in another unit. Without it units/ is skipped.
+    #[arg(long)]
+    pub unit_rate: Option<f64>,
+    /// Named conversion (e.g. `glucose_mgdl_to_mmoll`); see UNIT_PRESETS.
+    #[arg(long, conflicts_with = "unit_factor", requires = "unit_rate")]
+    pub unit_preset: Option<String>,
+    /// Custom conversion factor; the alternative to --unit-preset.
+    #[arg(long, requires = "unit_rate")]
+    pub unit_factor: Option<f64>,
+    /// Custom conversion offset, added after --unit-factor.
+    #[arg(long, requires = "unit_factor", conflicts_with = "unit_preset")]
+    pub unit_offset: Option<f64>,
     #[arg(long, default_value = "output")]
     pub output: PathBuf,
 }
@@ -250,6 +270,30 @@ pub struct SweepArgs {
     /// Adds --sweep-steps more points within ±FRAC of the cutoff (e.g. 0.1).
     #[arg(long, value_name = "FRAC")]
     pub sweep_near: Option<f64>,
+}
+
+/// Mirrors `pasteur_core::ScrambleEncoding` for clap.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ScrambleEncodingArg {
+    /// `5,2`, `1,200.5`, ` 5.2 `, `5.2e0`.
+    NumericText,
+    /// `<0.01`, `>500`, `ND`, `QNS`.
+    Censored,
+    /// `5.2 mg/dL`.
+    UnitSuffix,
+    /// `-999`, `9999`: numeric stand-ins for missing.
+    Sentinel,
+}
+
+impl From<ScrambleEncodingArg> for ScrambleEncoding {
+    fn from(e: ScrambleEncodingArg) -> Self {
+        match e {
+            ScrambleEncodingArg::NumericText => ScrambleEncoding::NumericText,
+            ScrambleEncodingArg::Censored => ScrambleEncoding::Censored,
+            ScrambleEncodingArg::UnitSuffix => ScrambleEncoding::UnitSuffix,
+            ScrambleEncodingArg::Sentinel => ScrambleEncoding::Sentinel,
+        }
+    }
 }
 
 #[derive(clap::Args)]

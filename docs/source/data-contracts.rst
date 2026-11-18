@@ -22,7 +22,7 @@ One row represents one source sample.
      - Selected by ``--id-col``; emitted as string ``source_row_id``
    * - Target feature
      - numeric
-     - Selected by ``--feature`` for blackout and jitter
+     - Selected by ``--feature`` for blackout, jitter, scramble, and units
    * - Companion columns
      - any
      - Repeatable ``--blackout-companion`` values nulled with the feature

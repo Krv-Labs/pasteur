@@ -23,8 +23,9 @@ Metrics
      - ROC AUC of the model on the clean cohort.
      - Ordinary discrimination. Higher is better; 0.5 is chance.
    * - ``metric_based.roc_auc.resiliency``
-     - ROC AUC on the blackout variant ÷ ROC AUC on the clean cohort.
-     - 1.0 means missing the feature cost nothing. 0.9 means the model kept
+     - ROC AUC on the stress variant (blackout, scramble, or units) ÷ ROC AUC
+       on the clean cohort.
+     - 1.0 means the stress cost nothing. 0.9 means the model kept
        90% of its AUC. Higher is better.
    * - ``metric_invariant.jitter_stability``
      - ``1 / (1 + 100 × v)``, where ``v`` is the per-patient variance of the
@@ -61,6 +62,10 @@ the matching metric from each run:
      - Metric to read
    * - ``evaluate blackout``
      - ``resiliency``
+   * - ``evaluate scramble``
+     - ``resiliency``, then ``parse_loss``
+   * - ``evaluate units``
+     - ``resiliency``
    * - ``evaluate jitter``
      - ``jitter_stability`` (needs ``--jitter-iters`` of 2 or more)
    * - ``evaluate flipper``
@@ -89,6 +94,15 @@ Pasteur stops with an error instead of reporting bad numbers. The simplest fix
 is to include the imputer in the exported pipeline; see
 :doc:`model-selection`.
 
+**Unparseable text is silent missingness.** Scoring casts features to numbers
+non-strictly, so scrambled values such as ``5,2``, ``<5.2`` or ``5.2 mg/dL``
+become null without an error. They then take ``--null-fill`` or the model's
+``absent_sentinel`` if set, and otherwise reach the model as NaN.
+``parse_loss`` counts them: the stress variant's loss beyond what the clean
+variant already loses in the same column. A scramble run with high parse loss
+is close to a blackout run. Sentinels
+such as ``-999`` parse, to wrong values.
+
 Per-patient predictions
 -----------------------
 
@@ -104,7 +118,8 @@ Per-patient predictions
      - The patient's original ID (synthetic path ID for flipper and sweep
        rows)
    * - ``variant_name``
-     - ``clean``, ``blackout``, ``jitter_0`` … , ``flipper``, or ``sweep``
+     - ``clean``, ``blackout``, ``jitter_0`` … , ``flipper``, ``sweep``,
+       ``scramble``, or ``units``
    * - ``label``
      - 1 if the patient is in the positive group, else 0
    * - one column per model
@@ -146,7 +161,7 @@ absent for binary models.
        than counted as 0.5. ``multi.roc_auc_micro`` pools every
        (patient, label) pair, so common labels dominate it.
    * - Resiliency
-     - Blackout AUC ÷ clean AUC for each label, then averaged. Labels whose
+     - Stress-variant AUC ÷ clean AUC for each label, then averaged. Labels whose
        clean AUC is 0.5 or below are skipped: a ratio against chance-level
        performance means nothing. ``multi.worst_label_resiliency`` is the
        minimum, because blacking out one assay often wrecks a single label
@@ -265,12 +280,13 @@ with these fields:
        1 for a perfect model, 0 for one no better than predicting the mean,
        and negative for one worse than that.
    * - ``metric_based.r2.resiliency``
-     - Blackout R² ÷ clean R²: the share of the model's skill over predicting
-       the cohort mean that survives blackout. 1.0 means blackout cost
-       nothing; 0 means the model fell back to no better than the mean;
-       negative means blackout made it worse than the mean. It can exceed
-       1.0 when blackout happens to help, which usually means the
-       blacked-out feature was hurting the model. A model whose clean R² is
+     - Stressed R² ÷ clean R², where the stress variant is blackout, scramble
+       or units: the share of the model's skill over predicting the cohort
+       mean that survives it. 1.0 means the stress cost nothing; 0 means the
+       model fell back to no better than the mean; negative means it made the
+       model worse than the mean. It can exceed 1.0 when the stress happens
+       to help, which usually means the perturbed feature was hurting the
+       model. A model whose clean R² is
        0 or below has no skill to keep and is reported at the neutral 1.0;
        read ``baselines.r2`` first.
    * - ``metric_invariant.jitter_stability``
@@ -297,7 +313,9 @@ The ``regression`` section reports the same behaviour in the target's units:
 ``target_sd``, ``blackout_rmse``, ``blackout_r2``, ``jitter_prediction_sd`` (the mean
 per-patient standard deviation of the prediction across jitter draws),
 ``flip_threshold``, and ``flipper_never_flipped``. It is absent for
-classifiers.
+classifiers. ``blackout_rmse`` and ``blackout_r2`` keep their names for
+compatibility but hold whichever stress variant was loaded (blackout,
+scramble, or units), as does ``metric_based.r2.resiliency``.
 
 **The flipper cutoff is a clinical choice.** There is no decision boundary in
 a regression model, so flipper needs one: the threshold your service acts on,
@@ -398,7 +416,10 @@ multilabel.
      - Share of pairs whose oracle label never changes along the path.
        Those pairs have no true boundary to compare against.
    * - ``oracle.abstain``
-     - With ``--abstain-class``, on blackout rows.
+     - With ``--abstain-class``, on the stress variant's rows (blackout,
+       scramble or units, whichever is loaded). Omitted when none is
+       loaded (``jitter``, ``flipper``, ``sweep``), so one set of flags
+       works for every simulation type.
        ``abstain_when_missing``: of the rows where the oracle abstains, the
        share where the model abstains too (higher is better).
        ``decided_when_missing``: the share where it chose another class

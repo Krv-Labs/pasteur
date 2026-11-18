@@ -6,6 +6,8 @@ Stress-test clinical AI models before you trust them. Pasteur simulates the ways
 - **Jitter**: measurement noise
 - **Flipper**: interpolation between patients with different labels, to find where a decision flips
 - **Sweep**: 1-D grid across a feature's clinical cutoff while holding every other feature fixed
+- **Scramble** (opt-in): values exported as messy text (`5,2`, `<5.2`, `5.2 mg/dL`, `-999`) that the loader silently drops or misreads
+- **Unit conversion** (opt-in): some rows in a different unit, as from a second site
 
 | | |
 |---|---|
@@ -53,7 +55,7 @@ pasteur-cli compare blackout \
   --output results-blackout.json
 ```
 
-`simulate` writes `sim/clean/`, `sim/blackout/`, `sim/jitter/`, and (with `--labels`) `sim/flipper/`. `compare` scores each ONNX model on the clean and perturbed rows and writes the metrics as JSON. See [Reading the results](https://docs.krv.ai/pasteur/metrics.html) and the [model-selection walkthrough](https://docs.krv.ai/pasteur/model-selection.html).
+`simulate` writes `sim/clean/`, `sim/blackout/`, `sim/jitter/`, and (with `--labels`) `sim/flipper/`; `--scramble-rate` and `--unit-rate` add `sim/scramble/` and `sim/units/`. `compare` scores each ONNX model on the clean and perturbed rows and writes the metrics as JSON. See [Reading the results](https://docs.krv.ai/pasteur/metrics.html) and the [model-selection walkthrough](https://docs.krv.ai/pasteur/model-selection.html).
 
 From Python:
 
