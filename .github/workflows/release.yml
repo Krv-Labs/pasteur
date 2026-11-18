@@ -101,7 +101,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # ponytail: token auth because crates.io Trusted Publishing needs the crates
+      # Token auth because crates.io Trusted Publishing needs the crates
       # to exist first; switch to rust-lang/crates-io-auth-action after v0.3.0.
       - run: cargo publish --workspace --locked
         env:

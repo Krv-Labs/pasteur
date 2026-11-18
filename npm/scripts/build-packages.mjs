@@ -16,7 +16,7 @@ import { parseArgs } from "node:util";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SCOPE = "@krv-labs";
 
-// ponytail: no musl; ort's download-binaries has no prebuilt ONNX Runtime for it.
+// No musl: ort's download-binaries has no prebuilt ONNX Runtime for it.
 export const PLATFORMS = [
   { suffix: "darwin-arm64", target: "aarch64-apple-darwin", os: "darwin", cpu: "arm64" },
   { suffix: "darwin-x64", target: "x86_64-apple-darwin", os: "darwin", cpu: "x64" },
